@@ -1,7 +1,56 @@
-# Tauri + React + Typescript
+# Focusbox
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+A minimal focus app: a **countdown timer**, a **task list** you check off, and a
+clean **notes document** — and nothing else. No tracking, no analytics, no
+accounts. Just the things you need to sit down and get something done.
 
-## Recommended IDE Setup
+## Features
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+- **Countdown timer** — set any duration (or tap a 5 / 15 / 25 / 50-minute
+  preset). It shows as a ring that gently empties as your time runs down. When
+  it reaches zero it pulses — quietly, no sound.
+- **Task list** — jot down what you want to get done and check items off.
+- **Notes** — a freeform document beside your tasks with light formatting:
+  headings, bold, italic, strikethrough, bullet/numbered lists, and checklists.
+  Use the toolbar or Markdown shortcuts (`# `, `- `, `1. `, `[ ] `).
+- **Everything saves automatically** and stays on your machine.
+- **Light & dark** themes follow your system automatically.
+
+## Download
+
+### Windows 11
+Grab the latest `Focusbox_*_x64-setup.exe` from the
+[**Releases**](https://github.com/mathiasthu/focusbox/releases) page and run it.
+
+> The app isn't code-signed, so Windows SmartScreen may show a
+> "Windows protected your PC" notice the first time. Click **More info →
+> Run anyway**. (It's unsigned, not unsafe.) Windows 11 already includes the
+> WebView2 runtime it needs, so there's nothing else to install.
+
+### macOS
+Build it yourself (see below) — a notarized download isn't published.
+
+## Built with
+
+[Tauri 2](https://tauri.app) (Rust) · [React](https://react.dev) + TypeScript +
+[Vite](https://vitejs.dev) · [TipTap](https://tiptap.dev) for the editor. One
+codebase builds both the macOS and Windows apps.
+
+## Develop / build from source
+
+Requires [Node.js](https://nodejs.org), the [Rust toolchain](https://rustup.rs),
+and the platform build tools (Xcode Command Line Tools on macOS; MSVC + WebView2
+on Windows).
+
+```bash
+npm install
+npm run tauri dev      # run with hot reload
+npm run tauri build    # build the installable app for your OS
+```
+
+The Windows installer is produced in CI on every `v*` tag — see
+`.github/workflows/windows-build.yml`.
+
+## License
+
+MIT

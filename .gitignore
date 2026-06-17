@@ -12,9 +12,12 @@ dist
 dist-ssr
 *.local
 
+# Local-only project docs / agent context (not for the public repo)
+CLAUDE.md
+HANDOFF.md
+
 # Editor directories and files
-.vscode/*
-!.vscode/extensions.json
+.vscode
 .idea
 .DS_Store
 *.suo
