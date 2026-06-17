@@ -29,8 +29,16 @@ export default function TaskList({ tasks, onChange }: Props) {
     onChange(tasks.filter((t) => t.id !== id));
   }
 
+  const remaining = tasks.filter((t) => !t.done).length;
+
   return (
     <section className="tasks">
+      <header className="tasks__header">
+        <h2 className="tasks__title">Tasks</h2>
+        {tasks.length > 0 && (
+          <span className="tasks__count">{remaining} left</span>
+        )}
+      </header>
       <div className="tasks__add">
         <input
           className="tasks__input"

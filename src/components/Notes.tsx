@@ -1,13 +1,92 @@
-import { useEditor, EditorContent } from "@tiptap/react";
+import { useEditor, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import Placeholder from "@tiptap/extension-placeholder";
+import type { ReactNode } from "react";
 import type { NotesDoc } from "../lib/store";
 
 interface Props {
   doc: NotesDoc;
   onChange: (doc: NotesDoc) => void;
+}
+
+function Btn({
+  active,
+  onClick,
+  label,
+  children,
+}: {
+  active?: boolean;
+  onClick: () => void;
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className={`tool${active ? " tool--active" : ""}`}
+      aria-label={label}
+      aria-pressed={active}
+      title={label}
+      onMouseDown={(e) => e.preventDefault()} // keep editor selection
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Toolbar({ editor }: { editor: Editor | null }) {
+  if (!editor) return <div className="toolbar" />;
+  const chain = () => editor.chain().focus();
+  return (
+    <div className="toolbar">
+      <Btn label="Heading 1" active={editor.isActive("heading", { level: 1 })} onClick={() => chain().toggleHeading({ level: 1 }).run()}>
+        <span className="tool__txt">H1</span>
+      </Btn>
+      <Btn label="Heading 2" active={editor.isActive("heading", { level: 2 })} onClick={() => chain().toggleHeading({ level: 2 }).run()}>
+        <span className="tool__txt">H2</span>
+      </Btn>
+
+      <span className="toolbar__sep" />
+
+      <Btn label="Bold" active={editor.isActive("bold")} onClick={() => chain().toggleBold().run()}>
+        <span className="tool__txt" style={{ fontWeight: 700 }}>B</span>
+      </Btn>
+      <Btn label="Italic" active={editor.isActive("italic")} onClick={() => chain().toggleItalic().run()}>
+        <span className="tool__txt" style={{ fontStyle: "italic", fontFamily: "Fraunces, serif" }}>I</span>
+      </Btn>
+      <Btn label="Strikethrough" active={editor.isActive("strike")} onClick={() => chain().toggleStrike().run()}>
+        <span className="tool__txt" style={{ textDecoration: "line-through" }}>S</span>
+      </Btn>
+
+      <span className="toolbar__sep" />
+
+      <Btn label="Bullet list" active={editor.isActive("bulletList")} onClick={() => chain().toggleBulletList().run()}>
+        <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+          <circle cx="3" cy="4.5" r="1.1" fill="currentColor" stroke="none" />
+          <circle cx="3" cy="9" r="1.1" fill="currentColor" stroke="none" />
+          <circle cx="3" cy="13.5" r="1.1" fill="currentColor" stroke="none" />
+          <path d="M7 4.5h8M7 9h8M7 13.5h8" />
+        </svg>
+      </Btn>
+      <Btn label="Numbered list" active={editor.isActive("orderedList")} onClick={() => chain().toggleOrderedList().run()}>
+        <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M8 4.5h7M8 9h7M8 13.5h7" />
+          <path d="M2 3.2h1.2v3M1.7 13.9h1.6M1.7 11.6c0-.6 1.5-.6 1.5.2 0 .5-1.5 1-1.5 2.1" stroke="currentColor" />
+        </svg>
+      </Btn>
+      <Btn label="Checklist" active={editor.isActive("taskList")} onClick={() => chain().toggleTaskList().run()}>
+        <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="1.5" y="2" width="6" height="6" rx="1.4" />
+          <path d="M2.8 5l1.3 1.3 2-2.4" />
+          <path d="M10.5 5h5.5M10.5 12.5h5.5" />
+          <rect x="1.5" y="9.5" width="6" height="6" rx="1.4" />
+        </svg>
+      </Btn>
+    </div>
+  );
 }
 
 export default function Notes({ doc, onChange }: Props) {
@@ -18,17 +97,19 @@ export default function Notes({ doc, onChange }: Props) {
       TaskItem.configure({ nested: true }),
       Placeholder.configure({
         placeholder:
-          "Notes…  Try “# ” for a heading, “- ” for a list, “[ ] ” for a checkbox.",
+          "Start writing…  Use the bar above, or type “# ”, “- ”, “[ ] ” for instant formatting.",
       }),
     ],
-    // Content is set once at mount; the parent only renders after state loads.
     content: doc ?? "",
     onUpdate: ({ editor }) => onChange(editor.getJSON() as NotesDoc),
   });
 
   return (
     <section className="notes">
-      <EditorContent editor={editor} className="notes__editor" />
+      <Toolbar editor={editor} />
+      <div className="notes__scroll">
+        <EditorContent editor={editor} className="notes__editor" />
+      </div>
     </section>
   );
 }

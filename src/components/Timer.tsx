@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 
 const PRESETS = [
-  { label: "5m", sec: 5 * 60 },
-  { label: "15m", sec: 15 * 60 },
-  { label: "25m", sec: 25 * 60 },
+  { label: "5", sec: 5 * 60 },
+  { label: "15", sec: 15 * 60 },
+  { label: "25", sec: 25 * 60 },
+  { label: "50", sec: 50 * 60 },
 ];
+
+const R = 92;
+const CIRC = 2 * Math.PI * R;
 
 function format(totalSec: number): string {
   const s = Math.max(0, totalSec);
@@ -29,7 +33,6 @@ export default function Timer() {
   const [finished, setFinished] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Drive the countdown.
   useEffect(() => {
     if (!running) return;
     intervalRef.current = setInterval(() => {
@@ -48,6 +51,16 @@ export default function Timer() {
   }, [running]);
 
   const editable = !running && !finished;
+  const fraction = durationSec > 0 ? remainingSec / durationSec : 0;
+  const dashOffset = CIRC * (1 - fraction);
+
+  const status = finished
+    ? "time's up"
+    : running
+      ? "focusing"
+      : remainingSec !== durationSec
+        ? "paused"
+        : "set timer";
 
   function setDuration(sec: number) {
     const safe = Math.max(0, sec);
@@ -67,11 +80,9 @@ export default function Timer() {
     setFinished(false);
     setRunning(true);
   }
-
   function pause() {
     setRunning(false);
   }
-
   function reset() {
     setRunning(false);
     setFinished(false);
@@ -80,43 +91,63 @@ export default function Timer() {
 
   return (
     <section className={`timer${finished ? " timer--finished" : ""}`}>
-      {editable ? (
-        <div className="timer__edit">
-          <input
-            className="timer__field"
-            type="text"
-            inputMode="numeric"
-            aria-label="Minutes"
-            value={String(Math.floor(durationSec / 60)).padStart(2, "0")}
-            onChange={(e) => onEditField("min", e.target.value)}
-            onFocus={(e) => e.target.select()}
+      <div className="dial">
+        <svg className="dial__svg" viewBox="0 0 200 200" aria-hidden="true">
+          <circle className="dial__track" cx="100" cy="100" r={R} />
+          <circle
+            className={`dial__progress${running ? " dial__progress--animating" : ""}`}
+            cx="100"
+            cy="100"
+            r={R}
+            style={{
+              strokeDasharray: CIRC,
+              strokeDashoffset: dashOffset,
+            }}
           />
-          <span className="timer__colon">:</span>
-          <input
-            className="timer__field"
-            type="text"
-            inputMode="numeric"
-            aria-label="Seconds"
-            value={String(durationSec % 60).padStart(2, "0")}
-            onChange={(e) => onEditField("sec", e.target.value)}
-            onFocus={(e) => e.target.select()}
-          />
+        </svg>
+
+        <div className="dial__center">
+          {editable ? (
+            <div className="dial__edit">
+              <input
+                className="dial__field"
+                type="text"
+                inputMode="numeric"
+                aria-label="Minutes"
+                value={String(Math.floor(durationSec / 60)).padStart(2, "0")}
+                onChange={(e) => onEditField("min", e.target.value)}
+                onFocus={(e) => e.target.select()}
+              />
+              <span className="dial__colon">:</span>
+              <input
+                className="dial__field"
+                type="text"
+                inputMode="numeric"
+                aria-label="Seconds"
+                value={String(durationSec % 60).padStart(2, "0")}
+                onChange={(e) => onEditField("sec", e.target.value)}
+                onFocus={(e) => e.target.select()}
+              />
+            </div>
+          ) : (
+            <div className="dial__readout" aria-live="polite">
+              {format(remainingSec)}
+            </div>
+          )}
+          <span className="dial__status">{status}</span>
         </div>
-      ) : (
-        <div className="timer__display" aria-live="polite">
-          {format(remainingSec)}
-        </div>
-      )}
+      </div>
 
       {editable && (
         <div className="timer__presets">
           {PRESETS.map((p) => (
             <button
               key={p.label}
-              className="chip"
+              className={`chip${durationSec === p.sec ? " chip--active" : ""}`}
               onClick={() => setDuration(p.sec)}
             >
               {p.label}
+              <span className="chip__unit">min</span>
             </button>
           ))}
         </div>
@@ -140,7 +171,7 @@ export default function Timer() {
         )}
         {finished && (
           <button className="btn btn--primary" onClick={reset}>
-            Done — Reset
+            Reset
           </button>
         )}
       </div>

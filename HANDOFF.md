@@ -24,12 +24,18 @@ Rust backend is intentionally near-default — all app logic lives in the fronte
 
 ## Behavior decisions (locked, from the original interview)
 
-- **Timer:** countdown you set (editable mm:ss + 5/15/25-min preset chips; Start/Pause/Reset).
-- **Timer end:** **visual only** — the readout pulses in the accent color. No sound, no system notification.
+- **Timer:** countdown you set (editable mm:ss + 5/15/25/50-min preset chips; Start/Pause/Reset). Shown as a **circular ring that depletes** as time runs down (the "line slowly disappears"). A status caption reads set timer / focusing / paused / time's up.
+- **Timer end:** **visual only** — the readout + ring pulse in the accent color. No sound, no system notification.
 - **Timer ↔ tasks:** fully independent. Timer does **not** log time against tasks.
-- **Tasks:** add (input + Enter), toggle done (checkbox + strikethrough), delete (hover ×). Persisted.
-- **Notes:** one persistent freeform doc. Markdown shortcuts: `# ` heading, `- ` bullet, `1. ` numbered, `[ ] ` checkbox, `**bold**`/`*italic*`. No colors/tables/images.
-- **Layout:** single resizable window. Left column = timer (top) + task list (below). Right pane = notes doc.
+- **Tasks:** add (input + Enter), toggle done (custom checkbox + strikethrough), delete (hover ×). Header shows "N left". Persisted.
+- **Notes:** one persistent freeform doc with a **formatting toolbar pinned at the top-left** (H1, H2, bold, italic, strike, bullet, numbered, checklist) plus markdown shortcuts: `# `, `- `, `1. `, `[ ] `, `**bold**`/`*italic*`. No colors/tables/images.
+- **Layout:** single resizable window, **50 / 50 split** — left half = timer (top) + task list (below); right half = notes (toolbar + editor).
+
+## Design system ("quiet study" editorial)
+
+- **Fonts (Google Fonts CDN, see `index.html`):** Fraunces (serif) for timer numerals, headings, wordmark; Hanken Grotesk for UI/body. Solid system fallbacks if offline — consider self-hosting/bundling later for full offline fidelity.
+- **Palette:** warm paper + ink with a single burnt-clay accent (`--accent`); full light/dark via `prefers-color-scheme`. All tokens are CSS variables at the top of `src/styles.css`.
+- **Touches:** depleting SVG ring (stroke-dashoffset, 1s linear transition), film-grain overlay (`body::after`), custom checkboxes, pill buttons/chips, staggered page fade-in.
 
 ## Project structure
 
@@ -43,11 +49,12 @@ Rust backend is intentionally near-default — all app logic lives in the fronte
     App.tsx             # owns tasks + notesDoc state; hydrates + persists; 2-pane layout
     styles.css          # all styling (light/dark)
     components/
-      Timer.tsx         # countdown; visual-only finish (.timer--finished pulse)
-      TaskList.tsx      # add / toggle / delete
-      Notes.tsx         # TipTap editor, single persisted doc
+      Timer.tsx         # countdown + depleting SVG ring; visual-only finish
+      TaskList.tsx      # add / toggle / delete; "N left" header
+      Notes.tsx         # TipTap editor + formatting Toolbar (top-left)
     lib/
-      store.ts          # loadState() + debounced saveState() via plugin-store
+      store.ts          # loadState() + debounced saveState(); Tauri plugin-store,
+                        #   falls back to localStorage in a plain browser (dev preview)
   src-tauri/
     tauri.conf.json     # window: "Focusbox", 960x600, min 720x480
     capabilities/default.json  # includes "store:default" permission
@@ -71,9 +78,11 @@ Prerequisites: Node, Rust toolchain (`rustup`), Xcode Command Line Tools. All pr
 
 ## Current state (2026-06-17)
 
-- Initial version complete and committed.
-- Verified: `tsc --noEmit` clean; `npm run tauri build` succeeds → `Focusbox.app` + 3.2 MB `Focusbox_0.1.0_aarch64.dmg`; app launches and runs.
-- **Not yet hand-verified by clicking** in the native window: live countdown tick, task checkboxes, markdown shortcuts, persistence across relaunch. (Build/launch/typecheck are machine-verified.)
+- Initial version + full visual redesign complete and committed.
+- The localStorage fallback means the UI now runs in a plain browser (`npm run dev` → http://localhost:1420), which was used to verify the redesign via Playwright:
+  - 50/50 layout, depleting ring (confirmed receding mid-countdown), toolbar + active states, H1 via toolbar, markdown `[ ]` checkbox shortcut, task + checklist toggling/strikethrough, light **and** dark themes — all confirmed visually.
+- `tsc --noEmit` clean; `npm run tauri build` succeeds → `Focusbox.app` + `Focusbox_0.1.0_aarch64.dmg`.
+- Still worth a native-window eyeball: persistence across an actual app relaunch (the Tauri plugin-store path; the browser path is verified).
 - Windows build: deferred, but no macOS-only APIs are used.
 
 ## Workflow rule (MANDATORY)
@@ -88,3 +97,4 @@ This keeps every agent working with full, current context. Do not leave uncommit
 ## Changelog
 
 - **2026-06-17** — Initial build: Tauri 2 + React/TS scaffold, Timer / TaskList / Notes components, plugin-store persistence, light/dark styling. Production build verified.
+- **2026-06-17** — Full redesign ("quiet study" editorial): 50/50 layout, circular depleting-ring timer (+50-min preset & status caption), formatting toolbar at top of notes, Fraunces + Hanken Grotesk fonts, grain + custom checkboxes, refined light/dark. Added localStorage fallback in `store.ts` so the UI runs in a plain browser. Verified via Playwright (light + dark); production build re-verified.
