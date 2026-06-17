@@ -1,4 +1,4 @@
-import { useEditor, EditorContent, type Editor } from "@tiptap/react";
+import { useEditor, useEditorState, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
@@ -38,32 +38,52 @@ function Btn({
 }
 
 function Toolbar({ editor }: { editor: Editor | null }) {
-  if (!editor) return <div className="toolbar" />;
+  // In TipTap v3, useEditor does not re-render on every transaction. Derive the
+  // active states reactively so highlights track the cursor (and clear when it
+  // leaves formatted text) instead of getting stuck "on" after a command.
+  const active = useEditorState({
+    editor,
+    selector: ({ editor }) =>
+      editor
+        ? {
+            h1: editor.isActive("heading", { level: 1 }),
+            h2: editor.isActive("heading", { level: 2 }),
+            bold: editor.isActive("bold"),
+            italic: editor.isActive("italic"),
+            strike: editor.isActive("strike"),
+            bullet: editor.isActive("bulletList"),
+            ordered: editor.isActive("orderedList"),
+            task: editor.isActive("taskList"),
+          }
+        : null,
+  });
+
+  if (!editor || !active) return <div className="toolbar" />;
   const chain = () => editor.chain().focus();
   return (
     <div className="toolbar">
-      <Btn label="Heading 1" active={editor.isActive("heading", { level: 1 })} onClick={() => chain().toggleHeading({ level: 1 }).run()}>
+      <Btn label="Heading 1" active={active.h1} onClick={() => chain().toggleHeading({ level: 1 }).run()}>
         <span className="tool__txt">H1</span>
       </Btn>
-      <Btn label="Heading 2" active={editor.isActive("heading", { level: 2 })} onClick={() => chain().toggleHeading({ level: 2 }).run()}>
+      <Btn label="Heading 2" active={active.h2} onClick={() => chain().toggleHeading({ level: 2 }).run()}>
         <span className="tool__txt">H2</span>
       </Btn>
 
       <span className="toolbar__sep" />
 
-      <Btn label="Bold" active={editor.isActive("bold")} onClick={() => chain().toggleBold().run()}>
+      <Btn label="Bold" active={active.bold} onClick={() => chain().toggleBold().run()}>
         <span className="tool__txt" style={{ fontWeight: 700 }}>B</span>
       </Btn>
-      <Btn label="Italic" active={editor.isActive("italic")} onClick={() => chain().toggleItalic().run()}>
+      <Btn label="Italic" active={active.italic} onClick={() => chain().toggleItalic().run()}>
         <span className="tool__txt" style={{ fontStyle: "italic", fontFamily: "Fraunces, serif" }}>I</span>
       </Btn>
-      <Btn label="Strikethrough" active={editor.isActive("strike")} onClick={() => chain().toggleStrike().run()}>
+      <Btn label="Strikethrough" active={active.strike} onClick={() => chain().toggleStrike().run()}>
         <span className="tool__txt" style={{ textDecoration: "line-through" }}>S</span>
       </Btn>
 
       <span className="toolbar__sep" />
 
-      <Btn label="Bullet list" active={editor.isActive("bulletList")} onClick={() => chain().toggleBulletList().run()}>
+      <Btn label="Bullet list" active={active.bullet} onClick={() => chain().toggleBulletList().run()}>
         <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
           <circle cx="3" cy="4.5" r="1.1" fill="currentColor" stroke="none" />
           <circle cx="3" cy="9" r="1.1" fill="currentColor" stroke="none" />
@@ -71,13 +91,13 @@ function Toolbar({ editor }: { editor: Editor | null }) {
           <path d="M7 4.5h8M7 9h8M7 13.5h8" />
         </svg>
       </Btn>
-      <Btn label="Numbered list" active={editor.isActive("orderedList")} onClick={() => chain().toggleOrderedList().run()}>
+      <Btn label="Numbered list" active={active.ordered} onClick={() => chain().toggleOrderedList().run()}>
         <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
           <path d="M8 4.5h7M8 9h7M8 13.5h7" />
           <path d="M2 3.2h1.2v3M1.7 13.9h1.6M1.7 11.6c0-.6 1.5-.6 1.5.2 0 .5-1.5 1-1.5 2.1" stroke="currentColor" />
         </svg>
       </Btn>
-      <Btn label="Checklist" active={editor.isActive("taskList")} onClick={() => chain().toggleTaskList().run()}>
+      <Btn label="Checklist" active={active.task} onClick={() => chain().toggleTaskList().run()}>
         <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
           <rect x="1.5" y="2" width="6" height="6" rx="1.4" />
           <path d="M2.8 5l1.3 1.3 2-2.4" />

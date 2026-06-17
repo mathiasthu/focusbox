@@ -50,7 +50,9 @@ export default function Timer() {
     };
   }, [running]);
 
-  const editable = !running && !finished;
+  // Edit mode only when stopped at the full set duration (fresh / reset).
+  // When paused mid-countdown we keep showing the readout (the paused time).
+  const editable = !running && !finished && remainingSec === durationSec;
   const fraction = durationSec > 0 ? remainingSec / durationSec : 0;
   const dashOffset = CIRC * (1 - fraction);
 
