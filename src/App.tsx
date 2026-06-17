@@ -39,11 +39,12 @@ export default function App() {
 
   return (
     <div className="app">
-      <aside className="app__left">
+      <aside className="app__focus">
+        <span className="wordmark">Focusbox</span>
         <Timer />
         <TaskList tasks={tasks} onChange={updateTasks} />
       </aside>
-      <main className="app__right">
+      <main className="app__notes">
         <Notes doc={notesDoc} onChange={updateNotes} />
       </main>
     </div>
