@@ -64,6 +64,22 @@ Rust backend is intentionally near-default — all app logic lives in the fronte
 
 Note: `src/App.css` and `src/assets/` are leftover scaffold files, currently unused (safe to delete later).
 
+## Windows build
+
+Can't be compiled on the Mac (Tauri needs the Windows MSVC + WebView2 toolchain).
+Built in the cloud via GitHub Actions — `.github/workflows/windows-build.yml`:
+
+- **Manual:** Actions tab → "Build Windows app" → Run workflow → download the
+  `focusbox-windows-installer` artifact from the run.
+- **Release:** push a tag `vX.Y.Z` → the workflow also publishes a public GitHub
+  Release with the NSIS `*-setup.exe` attached (shareable download link).
+
+Output is a single double-click installer (`Focusbox_<ver>_x64-setup.exe`).
+Windows 11 has WebView2 preinstalled. App is unsigned → SmartScreen shows
+"Windows protected your PC" → More info → Run anyway.
+
+Repo: https://github.com/mathiasthu/focusbox (public).
+
 ## How to run
 
 ```bash
@@ -98,4 +114,5 @@ This keeps every agent working with full, current context. Do not leave uncommit
 
 - **2026-06-17** — Initial build: Tauri 2 + React/TS scaffold, Timer / TaskList / Notes components, plugin-store persistence, light/dark styling. Production build verified.
 - **2026-06-17** — Full redesign ("quiet study" editorial): 50/50 layout, circular depleting-ring timer (+50-min preset & status caption), formatting toolbar at top of notes, Fraunces + Hanken Grotesk fonts, grain + custom checkboxes, refined light/dark. Added localStorage fallback in `store.ts` so the UI runs in a plain browser. Verified via Playwright (light + dark); production build re-verified.
+- **2026-06-17** — Added GitHub Actions Windows build (`.github/workflows/windows-build.yml`): builds the NSIS installer on a Windows cloud runner, uploads it as an artifact, and publishes a public Release on `v*` tags. Pushed repo to GitHub (public, mathiasthu/focusbox).
 - **2026-06-17** — Bug fixes: (1) Pause now keeps showing the paused time — `editable` in `Timer.tsx` only enters edit mode at the full set duration (`remainingSec === durationSec`), so a paused countdown shows its readout. (2) Toolbar highlights were stuck "on" because TipTap v3's `useEditor` doesn't re-render per transaction; `Notes.tsx` now derives active states via `useEditorState`, so highlights track the cursor and clear when it leaves formatted text. Both verified via Playwright; build re-verified.

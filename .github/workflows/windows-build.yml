@@ -1,0 +1,61 @@
+name: Build Windows app
+
+# Builds the Windows installer in the cloud (no Windows machine needed).
+#
+# - "Run workflow" button (Actions tab) → builds and uploads the installer as a
+#   downloadable artifact on the run page.
+# - Pushing a version tag like v0.1.0 → also publishes a public GitHub Release
+#   with the installer attached, giving a clean download link to share.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # needed to create the Release
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri app (NSIS installer)
+        run: npm run tauri build -- --bundles nsis
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: focusbox-windows-installer
+          path: src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+
+      - name: Publish release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src-tauri/target/release/bundle/nsis/*-setup.exe
+          body: |
+            Focusbox for Windows 11.
+
+            Download the `*-setup.exe` below and run it. Windows SmartScreen may
+            show a "Windows protected your PC" warning the first time — click
+            **More info → Run anyway** (the app is just unsigned, not unsafe).
