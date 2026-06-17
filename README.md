@@ -27,8 +27,13 @@ Grab the latest `Focusbox_*_x64-setup.exe` from the
 > Run anyway**. (It's unsigned, not unsafe.) Windows 11 already includes the
 > WebView2 runtime it needs, so there's nothing else to install.
 
-### macOS
-Build it yourself (see below) — a notarized download isn't published.
+### macOS (Apple Silicon)
+Download the `Focusbox_*_aarch64.dmg` from the
+[**Releases**](https://github.com/mathiasthu/focusbox/releases) page, open it,
+and drag Focusbox to Applications.
+
+> The app isn't signed/notarized, so the first launch needs a **right-click →
+> Open** (then confirm), or run `xattr -cr /Applications/Focusbox.app` once.
 
 ## Built with
 
@@ -48,8 +53,8 @@ npm run tauri dev      # run with hot reload
 npm run tauri build    # build the installable app for your OS
 ```
 
-The Windows installer is produced in CI on every `v*` tag — see
-`.github/workflows/windows-build.yml`.
+Both installers are produced in CI on every `v*` tag — see
+`.github/workflows/build-apps.yml`.
 
 ## License
 

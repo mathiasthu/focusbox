@@ -1,0 +1,76 @@
+name: Build apps
+
+# Builds the installers in the cloud (no local toolchain needed).
+#
+# - "Run workflow" button (Actions tab) → builds and uploads each installer as a
+#   downloadable artifact on the run page.
+# - Pushing a version tag like v0.1.0 → also publishes a public GitHub Release
+#   with the Windows (.exe) and macOS (.dmg) installers attached.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    permissions:
+      contents: write # needed to create the Release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            bundles: nsis
+            artifact_glob: src-tauri/target/release/bundle/nsis/*-setup.exe
+            artifact_name: focusbox-windows-installer
+          - os: macos-latest
+            bundles: dmg
+            artifact_glob: src-tauri/target/release/bundle/dmg/*.dmg
+            artifact_name: focusbox-macos-dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri app
+        run: npm run tauri build -- --bundles ${{ matrix.bundles }}
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_glob }}
+          if-no-files-found: error
+
+      - name: Publish release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2 (2.x)
+        with:
+          files: ${{ matrix.artifact_glob }}
+          body: |
+            Focusbox — minimal countdown timer + tasks + notes.
+
+            **Windows 11:** download the `*-setup.exe` and run it. SmartScreen may
+            warn the first time → **More info → Run anyway** (unsigned, not unsafe).
+            WebView2 is already built into Windows 11.
+
+            **macOS (Apple Silicon):** download the `.dmg`, drag Focusbox to
+            Applications. The app is unsigned, so the first launch needs a
+            right-click → **Open** (or run `xattr -cr /Applications/Focusbox.app`).
