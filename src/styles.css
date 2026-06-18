@@ -722,6 +722,77 @@ body::after {
   padding: 10px 8px;
 }
 
+/* ---------- Spotify mini-player ---------- */
+.spotify {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.spotify__now {
+  max-width: 100%;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.spotify__track {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+.spotify__artist {
+  color: var(--ink-faint);
+  font-weight: 500;
+}
+.spotify__hint {
+  color: var(--ink-faint);
+  font-style: italic;
+  font-size: 12px;
+}
+
+.spotify__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.sp-btn:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.sp-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.sp-btn--play {
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+}
+.sp-btn--play:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
 /* ---------- Notes ---------- */
 .notes {
   display: flex;

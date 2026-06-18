@@ -25,6 +25,8 @@ interface Props {
   onThemeChange: (mode: ThemeMode) => void;
   accent: AccentId;
   onAccentChange: (id: AccentId) => void;
+  playerVisible: boolean;
+  onPlayerVisibleChange: (visible: boolean) => void;
 }
 
 export default function Settings({
@@ -34,6 +36,8 @@ export default function Settings({
   onThemeChange,
   accent,
   onAccentChange,
+  playerVisible,
+  onPlayerVisibleChange,
 }: Props) {
   useEffect(() => {
     if (!open) return;
@@ -92,6 +96,28 @@ export default function Settings({
                 onClick={() => onAccentChange(a.id)}
               />
             ))}
+          </div>
+        </div>
+
+        <div className="setting">
+          <span className="setting__label">Spotify player</span>
+          <div className="segmented" role="group" aria-label="Spotify player">
+            <button
+              type="button"
+              className={`segmented__opt${playerVisible ? " segmented__opt--active" : ""}`}
+              aria-pressed={playerVisible}
+              onClick={() => onPlayerVisibleChange(true)}
+            >
+              On
+            </button>
+            <button
+              type="button"
+              className={`segmented__opt${!playerVisible ? " segmented__opt--active" : ""}`}
+              aria-pressed={!playerVisible}
+              onClick={() => onPlayerVisibleChange(false)}
+            >
+              Off
+            </button>
           </div>
         </div>
 

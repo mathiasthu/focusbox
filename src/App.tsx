@@ -3,6 +3,7 @@ import Timer from "./components/Timer";
 import TaskList from "./components/TaskList";
 import Notes from "./components/Notes";
 import Settings from "./components/Settings";
+import SpotifyPlayer from "./components/SpotifyPlayer";
 import { loadState, saveState, type Task, type NotesDoc } from "./lib/store";
 import {
   applyTheme,
@@ -16,6 +17,7 @@ import {
   storeAccent,
   type AccentId,
 } from "./lib/accent";
+import { getPlayerVisible, storePlayerVisible } from "./lib/spotify";
 
 export default function App() {
   const [loaded, setLoaded] = useState(false);
@@ -24,6 +26,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(getStoredMode);
   const [accent, setAccent] = useState<AccentId>(getStoredAccent);
+  const [playerVisible, setPlayerVisible] = useState<boolean>(getPlayerVisible);
 
   // Hydrate persisted state once on mount.
   useEffect(() => {
@@ -58,6 +61,11 @@ export default function App() {
     storeAccent(accent);
   }, [accent]);
 
+  // Persist the Spotify-player visibility preference.
+  useEffect(() => {
+    storePlayerVisible(playerVisible);
+  }, [playerVisible]);
+
   function updateTasks(next: Task[]) {
     setTasks(next);
     saveState({ tasks: next });
@@ -89,6 +97,7 @@ export default function App() {
         </button>
         <Timer />
         <TaskList tasks={tasks} onChange={updateTasks} />
+        {playerVisible && <SpotifyPlayer />}
       </aside>
       <main className="app__notes">
         <Notes doc={notesDoc} onChange={updateNotes} />
@@ -101,6 +110,8 @@ export default function App() {
         onThemeChange={setThemeMode}
         accent={accent}
         onAccentChange={setAccent}
+        playerVisible={playerVisible}
+        onPlayerVisibleChange={setPlayerVisible}
       />
     </div>
   );
