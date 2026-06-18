@@ -7,6 +7,9 @@ const PRESETS = [
   { label: "2", unit: "h", sec: 120 * 60 },
 ];
 
+// Offered once the timer finishes, to keep going for another short block.
+const ADD_MINUTES = [5, 10, 15, 30];
+
 const R = 92;
 const CIRC = 2 * Math.PI * R;
 
@@ -97,6 +100,15 @@ export default function Timer() {
     setFinished(false);
     setRemainingMs(durationMs);
   }
+  // Extend after finishing: start a fresh countdown of `sec` right away so the
+  // ring refills and depletes over the new block.
+  function addTime(sec: number) {
+    setDurationSec(sec);
+    setRemainingMs(sec * 1000);
+    setFinished(false);
+    endRef.current = Date.now() + sec * 1000;
+    setRunning(true);
+  }
 
   return (
     <section className={`timer${finished ? " timer--finished" : ""}`}>
@@ -157,6 +169,17 @@ export default function Timer() {
             >
               {p.label}
               <span className="chip__unit">{p.unit}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {finished && (
+        <div className="timer__presets" role="group" aria-label="Add time">
+          {ADD_MINUTES.map((m) => (
+            <button key={m} className="chip" onClick={() => addTime(m * 60)}>
+              +{m}
+              <span className="chip__unit">min</span>
             </button>
           ))}
         </div>
