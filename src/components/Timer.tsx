@@ -186,6 +186,12 @@ export default function Timer() {
       )}
 
       <div className="timer__controls">
+        {/* When paused, Reset sits on the left and Start on the right. */}
+        {!running && !finished && remainingMs !== durationMs && (
+          <button className="btn btn--ghost" onClick={reset}>
+            Reset
+          </button>
+        )}
         {!running && !finished && (
           <button className="btn btn--primary" onClick={start} disabled={remainingMs <= 0}>
             Start
@@ -194,11 +200,6 @@ export default function Timer() {
         {running && (
           <button className="btn" onClick={pause}>
             Pause
-          </button>
-        )}
-        {!running && !finished && remainingMs !== durationMs && (
-          <button className="btn btn--ghost" onClick={reset}>
-            Reset
           </button>
         )}
         {finished && (
