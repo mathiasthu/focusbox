@@ -135,6 +135,34 @@ body::after {
   color: var(--accent);
 }
 
+/* ---------- Support link ---------- */
+.support {
+  margin-top: auto; /* pin to the bottom of the focus panel */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink-faint);
+  cursor: pointer;
+  transition: all 0.18s;
+}
+.support:hover {
+  color: var(--accent);
+  border-color: var(--line);
+  background: var(--accent-soft);
+}
+.support__heart {
+  font-size: 12px;
+  line-height: 1;
+}
+
 /* ---------- Timer dial ---------- */
 .timer {
   margin-top: 24px;

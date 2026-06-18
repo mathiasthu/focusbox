@@ -35,6 +35,12 @@ and drag Focusbox to Applications.
 > The app isn't signed/notarized, so the first launch needs a **right-click →
 > Open** (then confirm), or run `xattr -cr /Applications/Focusbox.app` once.
 
+## Support
+
+Focusbox is free and open source. If it helps you focus, you can
+[**support its development**](https://donate.stripe.com/REPLACE_WITH_YOUR_LINK) —
+entirely optional, always appreciated. ♥
+
 ## Built with
 
 [Tauri 2](https://tauri.app) (Rust) · [React](https://react.dev) + TypeScript +
