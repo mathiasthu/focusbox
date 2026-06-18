@@ -739,11 +739,12 @@ body::after {
   text-align: center;
   font-size: 12.5px;
   line-height: 1.3;
+}
+.spotify__track {
+  display: block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.spotify__track {
   color: var(--ink-soft);
   font-weight: 600;
 }

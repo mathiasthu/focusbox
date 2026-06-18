@@ -11,14 +11,22 @@ const POLL_MS = 3000;
 export default function SpotifyPlayer() {
   const [state, setState] = useState<SpotifyState>({ status: "unavailable" });
   const activeRef = useRef(true);
+  const inFlightRef = useRef(false);
 
   useEffect(() => {
     activeRef.current = true;
 
     async function tick() {
-      if (document.hidden) return; // stay quiet when the window isn't visible
-      const next = await getSpotifyState();
-      if (activeRef.current) setState(next);
+      // Stay quiet when hidden; skip if a poll is still pending (the first
+      // permission prompt blocks osascript, so don't stack more behind it).
+      if (document.hidden || inFlightRef.current) return;
+      inFlightRef.current = true;
+      try {
+        const next = await getSpotifyState();
+        if (activeRef.current) setState(next);
+      } finally {
+        inFlightRef.current = false;
+      }
     }
 
     void tick(); // immediate first read
@@ -44,22 +52,32 @@ export default function SpotifyPlayer() {
     }, 250);
   }
 
-  const available = state.status !== "unavailable";
+  const controllable =
+    state.status === "playing" ||
+    state.status === "paused" ||
+    state.status === "stopped";
   const playing = state.status === "playing";
 
   return (
     <section className="spotify" aria-label="Spotify player">
       <div className="spotify__now">
-        {available && state.track ? (
+        {controllable && state.track ? (
           <span className="spotify__track">
             {state.track}
             {state.artist && (
               <span className="spotify__artist"> · {state.artist}</span>
             )}
           </span>
+        ) : state.status === "denied" ? (
+          <span className="spotify__hint">
+            Allow Focusbox to control Spotify in System Settings ▸ Privacy &
+            Security ▸ Automation.
+          </span>
         ) : (
           <span className="spotify__hint">
-            {available ? "Nothing playing" : "Open Spotify to control playback"}
+            {controllable
+              ? "Nothing playing"
+              : "Open Spotify to control playback"}
           </span>
         )}
       </div>
@@ -69,7 +87,7 @@ export default function SpotifyPlayer() {
           className="sp-btn"
           aria-label="Previous track"
           title="Previous"
-          disabled={!available}
+          disabled={!controllable}
           onClick={() => act("previous")}
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -82,7 +100,7 @@ export default function SpotifyPlayer() {
           className="sp-btn sp-btn--play"
           aria-label={playing ? "Pause" : "Play"}
           title={playing ? "Pause" : "Play"}
-          disabled={!available}
+          disabled={!controllable}
           onClick={() => act("playpause")}
         >
           {playing ? (
@@ -101,7 +119,7 @@ export default function SpotifyPlayer() {
           className="sp-btn"
           aria-label="Next track"
           title="Next"
-          disabled={!available}
+          disabled={!controllable}
           onClick={() => act("next")}
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">

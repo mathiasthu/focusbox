@@ -2,7 +2,12 @@
 // preview) or on non-macOS there's no Tauri bridge, so everything degrades to
 // an "unavailable" player rather than throwing.
 
-export type SpotifyStatus = "playing" | "paused" | "stopped" | "unavailable";
+export type SpotifyStatus =
+  | "playing"
+  | "paused"
+  | "stopped"
+  | "denied"
+  | "unavailable";
 export type SpotifyAction = "playpause" | "next" | "previous";
 
 export interface SpotifyState {
