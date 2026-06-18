@@ -25,24 +25,22 @@
   --grain-opacity: 0.04;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1a1714;
-    --bg-2: #161311;
-    --paper: #221e1a;
-    --ink: #ece4d6;
-    --ink-soft: #b3a796;
-    --ink-faint: #6f6557;
-    --line: #342e27;
-    --line-strong: #443c33;
-    --accent: #e08a52;
-    --accent-deep: #c9743d;
-    --accent-soft: rgba(224, 138, 82, 0.16);
-    --on-accent: #1a120c;
-    --sage: #9aa882;
-    --shadow: 0 10px 34px -14px rgba(0, 0, 0, 0.6);
-    --grain-opacity: 0.05;
-  }
+:root[data-theme="dark"] {
+  --bg: #1a1714;
+  --bg-2: #161311;
+  --paper: #221e1a;
+  --ink: #ece4d6;
+  --ink-soft: #b3a796;
+  --ink-faint: #6f6557;
+  --line: #342e27;
+  --line-strong: #443c33;
+  --accent: #e08a52;
+  --accent-deep: #c9743d;
+  --accent-soft: rgba(224, 138, 82, 0.16);
+  --on-accent: #1a120c;
+  --sage: #9aa882;
+  --shadow: 0 10px 34px -14px rgba(0, 0, 0, 0.6);
+  --grain-opacity: 0.05;
 }
 
 * {
@@ -163,6 +161,156 @@ body::after {
   line-height: 1;
 }
 
+/* ---------- Icon button (gear) ---------- */
+.iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  transition: all 0.18s;
+}
+.iconbtn:hover {
+  background: var(--surface, var(--paper));
+  color: var(--ink);
+}
+.gear {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 5;
+}
+.gear:hover svg {
+  transform: rotate(40deg);
+}
+.gear svg {
+  transition: transform 0.3s ease;
+}
+
+/* ---------- Settings modal ---------- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: rgba(20, 14, 8, 0.34);
+  backdrop-filter: blur(3px);
+  animation: fade-in 0.18s ease both;
+}
+
+.modal {
+  width: min(420px, calc(100vw - 48px));
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  padding: 22px 24px 18px;
+  animation: pop-in 0.2s ease both;
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+.modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+.modal__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 22px;
+}
+.modal__close {
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  transition: color 0.15s;
+}
+.modal__close:hover {
+  color: var(--accent);
+}
+.modal__foot {
+  margin: 18px 0 0;
+  text-align: center;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+.setting--col {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.setting__label {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.setting__hint {
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+}
+.segmented__opt {
+  border: none;
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  padding: 6px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.segmented__opt:hover {
+  color: var(--ink);
+}
+.segmented__opt--active {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.modal .support {
+  margin-top: 0;
+  align-self: flex-start;
+  border-color: var(--line);
+  color: var(--accent);
+}
+
 /* ---------- Timer dial ---------- */
 .timer {
   margin-top: 24px;
@@ -196,10 +344,6 @@ body::after {
   stroke-width: 5;
   stroke-linecap: round;
   filter: drop-shadow(0 0 5px var(--accent-soft));
-}
-
-.dial__progress--animating {
-  transition: stroke-dashoffset 1s linear;
 }
 
 .timer--finished .dial__progress {

@@ -28,46 +28,52 @@ function clampInt(value: string, max: number): number {
 
 export default function Timer() {
   const [durationSec, setDurationSec] = useState(30 * 60);
-  const [remainingSec, setRemainingSec] = useState(30 * 60);
+  // Remaining time in milliseconds — drives both the readout and the ring.
+  const [remainingMs, setRemainingMs] = useState(30 * 60 * 1000);
   const [running, setRunning] = useState(false);
   const [finished, setFinished] = useState(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Absolute wall-clock time (ms) the countdown should reach zero.
+  const endRef = useRef(0);
 
+  // Timestamp-driven countdown: compute remaining from a target end time on
+  // every animation frame. Accurate (no setInterval drift) and smooth.
   useEffect(() => {
     if (!running) return;
-    intervalRef.current = setInterval(() => {
-      setRemainingSec((prev) => {
-        if (prev <= 1) {
-          setRunning(false);
-          setFinished(true);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+    let raf = 0;
+    const tick = () => {
+      const remaining = endRef.current - Date.now();
+      if (remaining <= 0) {
+        setRemainingMs(0);
+        setRunning(false);
+        setFinished(true);
+        return;
+      }
+      setRemainingMs(remaining);
+      raf = requestAnimationFrame(tick);
     };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
   }, [running]);
 
+  const durationMs = durationSec * 1000;
   // Edit mode only when stopped at the full set duration (fresh / reset).
-  // When paused mid-countdown we keep showing the readout (the paused time).
-  const editable = !running && !finished && remainingSec === durationSec;
-  const fraction = durationSec > 0 ? remainingSec / durationSec : 0;
+  const editable = !running && !finished && remainingMs === durationMs;
+  const fraction = durationMs > 0 ? Math.max(0, remainingMs / durationMs) : 0;
   const dashOffset = CIRC * (1 - fraction);
+  const displaySec = Math.ceil(remainingMs / 1000);
 
   const status = finished
     ? "time's up"
     : running
       ? "focusing"
-      : remainingSec !== durationSec
+      : remainingMs !== durationMs
         ? "paused"
         : "set timer";
 
   function setDuration(sec: number) {
     const safe = Math.max(0, sec);
     setDurationSec(safe);
-    setRemainingSec(safe);
+    setRemainingMs(safe * 1000);
     setFinished(false);
   }
 
@@ -78,17 +84,18 @@ export default function Timer() {
   }
 
   function start() {
-    if (remainingSec <= 0) return;
+    if (remainingMs <= 0) return;
+    endRef.current = Date.now() + remainingMs;
     setFinished(false);
     setRunning(true);
   }
   function pause() {
-    setRunning(false);
+    setRunning(false); // remainingMs already holds the current value
   }
   function reset() {
     setRunning(false);
     setFinished(false);
-    setRemainingSec(durationSec);
+    setRemainingMs(durationMs);
   }
 
   return (
@@ -97,7 +104,7 @@ export default function Timer() {
         <svg className="dial__svg" viewBox="0 0 200 200" aria-hidden="true">
           <circle className="dial__track" cx="100" cy="100" r={R} />
           <circle
-            className={`dial__progress${running ? " dial__progress--animating" : ""}`}
+            className="dial__progress"
             cx="100"
             cy="100"
             r={R}
@@ -133,7 +140,7 @@ export default function Timer() {
             </div>
           ) : (
             <div className="dial__readout" aria-live="polite">
-              {format(remainingSec)}
+              {format(displaySec)}
             </div>
           )}
           <span className="dial__status">{status}</span>
@@ -157,7 +164,7 @@ export default function Timer() {
 
       <div className="timer__controls">
         {!running && !finished && (
-          <button className="btn btn--primary" onClick={start} disabled={remainingSec <= 0}>
+          <button className="btn btn--primary" onClick={start} disabled={remainingMs <= 0}>
             Start
           </button>
         )}
@@ -166,7 +173,7 @@ export default function Timer() {
             Pause
           </button>
         )}
-        {!running && !finished && remainingSec !== durationSec && (
+        {!running && !finished && remainingMs !== durationMs && (
           <button className="btn btn--ghost" onClick={reset}>
             Reset
           </button>
