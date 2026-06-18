@@ -81,43 +81,54 @@ mod imp {
         run_osascript(&format!(r#"tell application "Spotify" to {cmd}"#)).map(|_| ())
     }
 
+    fn parse_state(out: &str) -> SpotifyState {
+        let mut lines = out.splitn(3, '\n');
+        let raw = lines.next().unwrap_or("").trim();
+        let track = lines.next().map(str::to_string).filter(|s| !s.is_empty());
+        let artist = lines.next().map(str::to_string).filter(|s| !s.is_empty());
+        let status = match raw {
+            "playing" => "playing",
+            "paused" => "paused",
+            _ => "stopped",
+        };
+        SpotifyState {
+            status: status.into(),
+            track,
+            artist,
+        }
+    }
+
     pub fn state() -> SpotifyState {
         if !spotify_running() {
             return SpotifyState::simple("unavailable");
         }
-        // Three linefeed-separated fields: state, track, artist. This `tell` is
-        // the first real Apple event — it triggers the Automation prompt.
-        let script = r#"tell application "Spotify"
-  set st to player state as string
-  if st is "stopped" then
-    return "stopped" & linefeed & "" & linefeed & ""
-  end if
-  return st & linefeed & (name of current track) & linefeed & (artist of current track)
-end tell"#;
-        match run_osascript(script) {
-            Ok(out) => {
-                let mut lines = out.splitn(3, '\n');
-                let raw = lines.next().unwrap_or("").trim();
-                let track = lines.next().map(str::to_string).filter(|s| !s.is_empty());
-                let artist = lines.next().map(str::to_string).filter(|s| !s.is_empty());
-                let status = match raw {
-                    "playing" => "playing",
-                    "paused" => "paused",
-                    _ => "stopped",
-                };
-                SpotifyState {
-                    status: status.into(),
-                    track,
-                    artist,
-                }
-            }
+        // One-liner in the `to` form. The block/`set` form hits an osascript
+        // parser quirk on recent macOS (a bare two-letter variable like `st` is
+        // misread → -2741), so we avoid it entirely. Returns status, track and
+        // artist on three lines. This is the first real Apple event, so it also
+        // surfaces the one-time Automation permission prompt.
+        let combined = r#"tell application "Spotify" to (player state as string) & linefeed & (name of current track) & linefeed & (artist of current track)"#;
+        match run_osascript(combined) {
+            Ok(out) => parse_state(&out),
             Err(e) if is_not_authorized(&e) => {
                 eprintln!("[focusbox] Spotify Apple events not authorized: {e}");
                 SpotifyState::simple("denied")
             }
-            Err(e) => {
-                eprintln!("[focusbox] spotify_state error: {e}");
-                SpotifyState::simple("unavailable")
+            Err(_) => {
+                // Most likely stopped with no current track to name — fall back
+                // to just the player state.
+                match run_osascript(r#"tell application "Spotify" to player state as string"#) {
+                    Ok(s) if s == "playing" || s == "paused" => SpotifyState::simple(&s),
+                    Ok(_) => SpotifyState::simple("stopped"),
+                    Err(e) if is_not_authorized(&e) => {
+                        eprintln!("[focusbox] Spotify Apple events not authorized: {e}");
+                        SpotifyState::simple("denied")
+                    }
+                    Err(e) => {
+                        eprintln!("[focusbox] spotify_state error: {e}");
+                        SpotifyState::simple("unavailable")
+                    }
+                }
             }
         }
     }
