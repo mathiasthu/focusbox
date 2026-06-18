@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 
 const PRESETS = [
-  { label: "5", sec: 5 * 60 },
-  { label: "15", sec: 15 * 60 },
-  { label: "25", sec: 25 * 60 },
-  { label: "50", sec: 50 * 60 },
+  { label: "30", unit: "min", sec: 30 * 60 },
+  { label: "1", unit: "h", sec: 60 * 60 },
+  { label: "1.5", unit: "h", sec: 90 * 60 },
+  { label: "2", unit: "h", sec: 120 * 60 },
 ];
 
 const R = 92;
@@ -27,8 +27,8 @@ function clampInt(value: string, max: number): number {
 }
 
 export default function Timer() {
-  const [durationSec, setDurationSec] = useState(25 * 60);
-  const [remainingSec, setRemainingSec] = useState(25 * 60);
+  const [durationSec, setDurationSec] = useState(30 * 60);
+  const [remainingSec, setRemainingSec] = useState(30 * 60);
   const [running, setRunning] = useState(false);
   const [finished, setFinished] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -149,7 +149,7 @@ export default function Timer() {
               onClick={() => setDuration(p.sec)}
             >
               {p.label}
-              <span className="chip__unit">min</span>
+              <span className="chip__unit">{p.unit}</span>
             </button>
           ))}
         </div>
