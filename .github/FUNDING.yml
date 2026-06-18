@@ -1,4 +1,4 @@
 # Adds a "Sponsor" button to the GitHub repo.
 # Replace the URL with your Stripe payment link (keep it in sync with
 # src/lib/config.ts and the README).
-custom: ["https://donate.stripe.com/REPLACE_WITH_YOUR_LINK"]
+custom: ["https://buy.stripe.com/00w7sNcd1aCY6lEazB6g80O"]

@@ -38,7 +38,7 @@ and drag Focusbox to Applications.
 ## Support
 
 Focusbox is free and open source. If it helps you focus, you can
-[**support its development**](https://donate.stripe.com/REPLACE_WITH_YOUR_LINK) —
+[**support its development**](https://buy.stripe.com/00w7sNcd1aCY6lEazB6g80O) —
 entirely optional, always appreciated. ♥
 
 ## Built with
