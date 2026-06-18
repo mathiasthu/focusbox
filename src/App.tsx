@@ -10,6 +10,12 @@ import {
   storeMode,
   type ThemeMode,
 } from "./lib/theme";
+import {
+  applyAccent,
+  getStoredAccent,
+  storeAccent,
+  type AccentId,
+} from "./lib/accent";
 
 export default function App() {
   const [loaded, setLoaded] = useState(false);
@@ -17,6 +23,7 @@ export default function App() {
   const [notesDoc, setNotesDoc] = useState<NotesDoc>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(getStoredMode);
+  const [accent, setAccent] = useState<AccentId>(getStoredAccent);
 
   // Hydrate persisted state once on mount.
   useEffect(() => {
@@ -44,6 +51,12 @@ export default function App() {
     mql.addEventListener("change", onChange);
     return () => mql.removeEventListener("change", onChange);
   }, [themeMode]);
+
+  // Apply + persist the accent color whenever it changes.
+  useEffect(() => {
+    applyAccent(accent);
+    storeAccent(accent);
+  }, [accent]);
 
   function updateTasks(next: Task[]) {
     setTasks(next);
@@ -86,6 +99,8 @@ export default function App() {
         onClose={() => setSettingsOpen(false)}
         themeMode={themeMode}
         onThemeChange={setThemeMode}
+        accent={accent}
+        onAccentChange={setAccent}
       />
     </div>
   );

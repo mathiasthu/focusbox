@@ -43,6 +43,49 @@
   --grain-opacity: 0.05;
 }
 
+/* ---------- Accent variants ----------
+   The default (clay) lives in the :root / dark blocks above. Each variant only
+   redefines the four accent tokens; everything in the UI reads from them, so
+   the whole app recolors. Keyed by data-accent on <html>, with a dark override
+   per accent. (data-accent="clay" matches nothing here → falls through to the
+   defaults above.) */
+:root[data-accent="green"] {
+  --accent: #5f7a45;
+  --accent-deep: #4e6638;
+  --accent-soft: rgba(95, 122, 69, 0.15);
+  --on-accent: #f9faf3;
+}
+:root[data-accent="blue"] {
+  --accent: #4a6d99;
+  --accent-deep: #3c5a80;
+  --accent-soft: rgba(74, 109, 153, 0.15);
+  --on-accent: #f5f8fc;
+}
+:root[data-accent="plum"] {
+  --accent: #8a4a63;
+  --accent-deep: #743d53;
+  --accent-soft: rgba(138, 74, 99, 0.15);
+  --on-accent: #fbf5f7;
+}
+:root[data-theme="dark"][data-accent="green"] {
+  --accent: #a2bd7c;
+  --accent-deep: #8ba566;
+  --accent-soft: rgba(162, 189, 124, 0.16);
+  --on-accent: #131707;
+}
+:root[data-theme="dark"][data-accent="blue"] {
+  --accent: #82a6d0;
+  --accent-deep: #6b8eba;
+  --accent-soft: rgba(130, 166, 208, 0.17);
+  --on-accent: #0c1219;
+}
+:root[data-theme="dark"][data-accent="plum"] {
+  --accent: #c585a0;
+  --accent-deep: #ad6f8a;
+  --accent-soft: rgba(197, 133, 160, 0.17);
+  --on-accent: #1a0f15;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -302,6 +345,30 @@ body::after {
 .segmented__opt--active {
   background: var(--accent);
   color: var(--on-accent);
+}
+
+.swatches {
+  display: inline-flex;
+  gap: 11px;
+}
+.swatch {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: var(--swatch);
+  cursor: pointer;
+  /* faint inset edge so pale swatches still read against the paper */
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.16);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.swatch:hover {
+  transform: scale(1.1);
+}
+.swatch--active {
+  /* paper gap + ring in the swatch's own color */
+  box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--swatch);
 }
 
 .modal .support {

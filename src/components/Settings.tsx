@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, type CSSProperties } from "react";
 import type { ThemeMode } from "../lib/theme";
+import { ACCENTS, type AccentId } from "../lib/accent";
 import { SUPPORT_URL, APP_VERSION } from "../lib/config";
 
 async function openExternal(url: string) {
@@ -22,9 +23,18 @@ interface Props {
   onClose: () => void;
   themeMode: ThemeMode;
   onThemeChange: (mode: ThemeMode) => void;
+  accent: AccentId;
+  onAccentChange: (id: AccentId) => void;
 }
 
-export default function Settings({ open, onClose, themeMode, onThemeChange }: Props) {
+export default function Settings({
+  open,
+  onClose,
+  themeMode,
+  onThemeChange,
+  accent,
+  onAccentChange,
+}: Props) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -63,6 +73,24 @@ export default function Settings({ open, onClose, themeMode, onThemeChange }: Pr
               >
                 {m.label}
               </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="setting">
+          <span className="setting__label">Accent</span>
+          <div className="swatches" role="group" aria-label="Accent color">
+            {ACCENTS.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                className={`swatch${accent === a.id ? " swatch--active" : ""}`}
+                style={{ "--swatch": a.swatch } as CSSProperties}
+                aria-label={a.label}
+                aria-pressed={accent === a.id}
+                title={a.label}
+                onClick={() => onAccentChange(a.id)}
+              />
             ))}
           </div>
         </div>
