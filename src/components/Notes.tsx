@@ -3,7 +3,7 @@ import StarterKit from "@tiptap/starter-kit";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import Placeholder from "@tiptap/extension-placeholder";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import type { NotesDoc } from "../lib/store";
 
 interface Props {
@@ -123,6 +123,19 @@ export default function Notes({ doc, onChange }: Props) {
     content: doc ?? "",
     onUpdate: ({ editor }) => onChange(editor.getJSON() as NotesDoc),
   });
+
+  // Apply an EXTERNAL doc change (e.g. notes pulled from another device by cloud
+  // sync) into the editor. Skip while the editor is focused so we never clobber
+  // what the user is actively typing — their version is the source of truth then,
+  // and LWW/conflict-copy handles the divergence. emitUpdate:false avoids a feedback
+  // loop back through onUpdate.
+  useEffect(() => {
+    if (!editor || editor.isFocused) return;
+    const incoming = doc == null ? null : JSON.stringify(doc);
+    const current = editor.isEmpty ? null : JSON.stringify(editor.getJSON());
+    if (incoming === current) return;
+    editor.commands.setContent(doc ?? "", { emitUpdate: false });
+  }, [doc, editor]);
 
   return (
     <section className="notes">

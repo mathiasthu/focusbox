@@ -378,6 +378,90 @@ body::after {
   color: var(--accent);
 }
 
+/* ---------- Account / cloud sync ---------- */
+.account {
+  /* it's the first setting in the modal — no top divider needed */
+  border-top: none;
+  padding-top: 0;
+}
+.account__input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 9px 11px;
+}
+.account__input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.account__row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.account__btn {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.account__btn:hover:not(:disabled) {
+  color: var(--ink);
+}
+.account__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.account__btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.account__btn--primary:hover:not(:disabled) {
+  color: var(--on-accent);
+  filter: brightness(1.05);
+}
+.account__email {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.account__status {
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.account__status--error {
+  color: #c0492b;
+}
+.account__error {
+  font-size: 12px;
+  color: #c0492b;
+}
+.account__recovery {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+  word-break: break-all;
+  color: var(--ink);
+  background: var(--accent-soft);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 10px 12px;
+}
+
 /* ---------- Timer dial ---------- */
 .timer {
   margin-top: 24px;

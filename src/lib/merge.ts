@@ -47,9 +47,18 @@ export function resolveNotes(
   remote: NotesValue,
   baseUpdatedAt: number | null,
 ): NotesResolution {
+  // Universal invariant: an empty (null) doc has nothing to preserve and must NEVER
+  // overwrite a real doc on the other side. This both (a) stops a fresh device from
+  // spawning a junk conflict copy when it first pulls real notes, and (b) stops a
+  // wiped/corrupt local cache from destroying the synced notes on the server. Applies
+  // regardless of timestamps/baseline.
+  if (local.doc === null && remote.doc !== null) return { current: remote };
+  if (remote.doc === null && local.doc !== null) return { current: local };
+
   const localChanged = baseUpdatedAt === null ? true : local.updated_at > baseUpdatedAt;
   const remoteChanged = baseUpdatedAt === null ? true : remote.updated_at > baseUpdatedAt;
   if (localChanged && remoteChanged && !sameDoc(local, remote)) {
+    // both docs are non-null here
     const [newer, older] =
       local.updated_at >= remote.updated_at ? [local, remote] : [remote, local];
     return { current: newer, conflict: older };

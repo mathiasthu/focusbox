@@ -1,16 +1,14 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
-
-export interface Task {
-  id: string;
-  text: string;
-  done: boolean;
-}
+import type { SyncedTask } from "./syncTypes";
+import { migrateTasks } from "./taskMap";
 
 // TipTap document JSON (shape varies); null until the user has typed anything.
 export type NotesDoc = Record<string, unknown> | null;
 
 export interface AppState {
-  tasks: Task[];
+  // Canonical task model carries sync metadata (order/updated_at/tombstone); the UI
+  // projects a slim {id,text,done} view via taskMap.visibleTasks().
+  tasks: SyncedTask[];
   notesDoc: NotesDoc;
 }
 
@@ -18,12 +16,14 @@ const FILE = "focusbox.json";
 const LS_KEY = "focusbox-state";
 
 // True inside the Tauri webview; false in a plain browser (dev preview).
-const isTauri =
+export const isTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 let storePromise: Promise<Store> | null = null;
 
-function getStore(): Promise<Store> {
+/** The shared plugin-store instance (focusbox.json). Reused by syncStore so both
+ * write to the same file without a second handle. */
+export function getStore(): Promise<Store> {
   if (!storePromise) {
     // autoSave off — we control persistence via the debounced flush below.
     storePromise = load(FILE, { defaults: {}, autoSave: false });
@@ -33,15 +33,18 @@ function getStore(): Promise<Store> {
 
 export async function loadState(): Promise<AppState> {
   const empty: AppState = { tasks: [], notesDoc: null };
+  const now = Date.now();
   try {
     if (isTauri) {
       const store = await getStore();
-      const tasks = (await store.get<Task[]>("tasks")) ?? [];
+      const tasks = migrateTasks(await store.get("tasks"), now);
       const notesDoc = (await store.get<NotesDoc>("notesDoc")) ?? null;
       return { tasks, notesDoc };
     }
     const raw = localStorage.getItem(LS_KEY);
-    return raw ? { ...empty, ...JSON.parse(raw) } : empty;
+    if (!raw) return empty;
+    const parsed = JSON.parse(raw);
+    return { tasks: migrateTasks(parsed.tasks, now), notesDoc: parsed.notesDoc ?? null };
   } catch (err) {
     console.error("Focusbox: failed to load state, starting fresh.", err);
     return empty;

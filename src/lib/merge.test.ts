@@ -108,4 +108,25 @@ describe("resolveNotes (LWW + conflict-copy)", () => {
     expect(sameDoc(n({ a: [1, 2] }, 1), n({ a: [1, 2] }, 9))).toBe(true);
     expect(sameDoc(n({ a: [1, 2] }, 1), n({ a: [1, 3] }, 9))).toBe(false);
   });
+
+  it("a null local doc never spawns a conflict copy (fresh device adopts remote)", () => {
+    // never-synced baseline + empty local + real remote: take remote, no junk conflict
+    const r = resolveNotes(n(null, 0), n({ v: "remote" }, 9), null);
+    expect(r.current.doc).toEqual({ v: "remote" });
+    expect(r.conflict).toBeUndefined();
+  });
+
+  it("a null remote doc never spawns a conflict copy (keeps local)", () => {
+    const r = resolveNotes(n({ v: "local" }, 9), n(null, 0), null);
+    expect(r.current.doc).toEqual({ v: "local" });
+    expect(r.conflict).toBeUndefined();
+  });
+
+  it("a wiped local cache never overwrites a real remote doc, even at an equal/synced baseline", () => {
+    // Regression: local was cleared (doc null) but its updated_at still equals the
+    // synced baseline + remote — must adopt remote, NOT push null over it.
+    const r = resolveNotes(n(null, 100), n({ v: "remote" }, 100), 100);
+    expect(r.current.doc).toEqual({ v: "remote" });
+    expect(r.conflict).toBeUndefined();
+  });
 });

@@ -1,9 +1,9 @@
 import { useState } from "react";
-import type { Task } from "../lib/store";
+import type { VisibleTask } from "../lib/taskMap";
 
 interface Props {
-  tasks: Task[];
-  onChange: (tasks: Task[]) => void;
+  tasks: VisibleTask[];
+  onChange: (tasks: VisibleTask[]) => void;
 }
 
 function newId(): string {

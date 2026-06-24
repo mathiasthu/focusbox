@@ -87,15 +87,20 @@ export interface AuthApi {
   refresh(refreshToken: string): Promise<{ access_token: string }>;
 }
 
+/** A fetch-compatible function. In the Tauri app we inject `@tauri-apps/plugin-http`'s
+ * fetch (Rust-side, no CORS); in the browser/tests the global `fetch` is used. */
+export type FetchImpl = typeof fetch;
+
 async function request(
   baseUrl: string,
   path: string,
+  fetchImpl: FetchImpl,
   opts: { method?: string; token?: string; body?: unknown } = {},
 ): Promise<Response> {
   const headers: Record<string, string> = {};
   if (opts.body !== undefined) headers["Content-Type"] = "application/json";
   if (opts.token) headers["Authorization"] = `Bearer ${opts.token}`;
-  const resp = await fetch(`${baseUrl}${path}`, {
+  const resp = await fetchImpl(`${baseUrl}${path}`, {
     method: opts.method ?? "GET",
     headers,
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
@@ -115,43 +120,46 @@ async function request(
   return resp;
 }
 
-export function createHttpApi(baseUrl: string = SYNC_API_URL): SyncApi & AuthApi {
+export function createHttpApi(
+  baseUrl: string = SYNC_API_URL,
+  fetchImpl: FetchImpl = fetch,
+): SyncApi & AuthApi {
   return {
     async signup(email, body) {
-      const r = await request(baseUrl, "/v1/auth/signup", {
+      const r = await request(baseUrl, "/v1/auth/signup", fetchImpl, {
         method: "POST",
         body: { email, ...body },
       });
       return r.json();
     },
     async login(email, authHash) {
-      const r = await request(baseUrl, "/v1/auth/login", {
+      const r = await request(baseUrl, "/v1/auth/login", fetchImpl, {
         method: "POST",
         body: { email, auth_hash: authHash },
       });
       return r.json();
     },
     async refresh(refreshToken) {
-      const r = await request(baseUrl, "/v1/auth/refresh", {
+      const r = await request(baseUrl, "/v1/auth/refresh", fetchImpl, {
         method: "POST",
         body: { refresh_token: refreshToken },
       });
       return r.json();
     },
     async getManifest(token) {
-      const r = await request(baseUrl, "/v1/sync", { token });
+      const r = await request(baseUrl, "/v1/sync", fetchImpl, { token });
       return (await r.json()).blobs;
     },
     async getBlob(token, key) {
-      const r = await request(baseUrl, `/v1/sync/${encodeURIComponent(key)}`, { token });
+      const r = await request(baseUrl, `/v1/sync/${encodeURIComponent(key)}`, fetchImpl, { token });
       return r.json();
     },
     async pushBlob(token, body) {
-      const r = await request(baseUrl, "/v1/sync", { method: "POST", token, body });
+      const r = await request(baseUrl, "/v1/sync", fetchImpl, { method: "POST", token, body });
       return r.json();
     },
     async deleteBlob(token, key) {
-      await request(baseUrl, `/v1/sync/${encodeURIComponent(key)}`, {
+      await request(baseUrl, `/v1/sync/${encodeURIComponent(key)}`, fetchImpl, {
         method: "DELETE",
         token,
       });

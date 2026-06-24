@@ -134,15 +134,49 @@ export interface Unlocked {
   session: Session;
 }
 
+/**
+ * Phase 1 of login: derive the auth_hash to send to the server and the encKey to
+ * finish with, from email+password alone — so Argon2id runs ONCE. The server returns
+ * `wrapped_adk` only after authenticating, hence the split (we need auth_hash first).
+ */
+export interface LoginStart {
+  auth_hash: string;
+  encKey: Uint8Array;
+}
+
+export function startLogin(email: string, password: string): LoginStart {
+  ensureReady();
+  const { encKey, authKey } = deriveKeys(email, password);
+  return { auth_hash: sodium.to_base64(authKey), encKey };
+}
+
+/** Phase 2 of login: unwrap the server's wrapped_adk with the encKey from startLogin. */
+export function completeLogin(encKey: Uint8Array, wrappedAdk: string): Session {
+  ensureReady();
+  const adk = aeadUnwrap(wrappedAdk, encKey); // throws if the password is wrong (AEAD auth fails)
+  return { adk, encKey };
+}
+
 export async function unlockAccount(
   email: string,
   password: string,
   wrappedAdk: string,
 ): Promise<Unlocked> {
+  const { auth_hash, encKey } = startLogin(email, password);
+  return { auth_hash, session: completeLogin(encKey, wrappedAdk) };
+}
+
+// --- ADK persistence helpers (base64). Local storage of the ADK is acceptable:
+// the app already keeps tasks/notes in plaintext on disk, and this never leaves the
+// device, so the server-side zero-knowledge property is unaffected. ---
+export function adkToBase64(adk: Uint8Array): string {
   ensureReady();
-  const { encKey, authKey } = deriveKeys(email, password);
-  const adk = aeadUnwrap(wrappedAdk, encKey); // throws if the password is wrong (AEAD auth fails)
-  return { auth_hash: sodium.to_base64(authKey), session: { adk, encKey } };
+  return sodium.to_base64(adk);
+}
+
+export function adkFromBase64(b64: string): Uint8Array {
+  ensureReady();
+  return sodium.from_base64(b64);
 }
 
 export async function recoverWithKey(

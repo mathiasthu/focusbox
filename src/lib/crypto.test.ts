@@ -4,6 +4,10 @@ import {
   initCrypto,
   createAccount,
   unlockAccount,
+  startLogin,
+  completeLogin,
+  adkToBase64,
+  adkFromBase64,
   recoverWithKey,
   rewrapForNewPassword,
   encryptBlob,
@@ -44,6 +48,23 @@ describe("account key lifecycle", () => {
     await expect(
       unlockAccount("a@b.com", "wrong", created.signup.wrapped_adk),
     ).rejects.toThrow();
+  });
+
+  it("two-phase startLogin/completeLogin matches unlockAccount", async () => {
+    const c = await createAccount("two@b.com", "pw");
+    const start = startLogin("two@b.com", "pw");
+    expect(start.auth_hash).toBe(c.signup.auth_hash);
+    const session = completeLogin(start.encKey, c.signup.wrapped_adk);
+    expect(sodium_equal(session.adk, c.session.adk)).toBe(true);
+  });
+
+  it("round-trips the ADK through base64 persistence", async () => {
+    const c = await createAccount("persist@b.com", "pw");
+    const restored = adkFromBase64(adkToBase64(c.session.adk));
+    expect(sodium_equal(restored, c.session.adk)).toBe(true);
+    // and the restored ADK still decrypts a blob made with the original
+    const blob = encryptBlob("after restart", c.session.adk);
+    expect(decryptBlob(blob.ciphertext, blob.nonce, restored)).toBe("after restart");
   });
 });
 

@@ -2,6 +2,8 @@ import { useEffect, type CSSProperties } from "react";
 import type { ThemeMode } from "../lib/theme";
 import { ACCENTS, type AccentId } from "../lib/accent";
 import { SUPPORT_URL, APP_VERSION } from "../lib/config";
+import AccountSync from "./AccountSync";
+import type { SyncController } from "../hooks/useSync";
 
 async function openExternal(url: string) {
   if ("__TAURI_INTERNALS__" in window) {
@@ -27,6 +29,7 @@ interface Props {
   onAccentChange: (id: AccentId) => void;
   playerVisible: boolean;
   onPlayerVisibleChange: (visible: boolean) => void;
+  sync: SyncController;
 }
 
 export default function Settings({
@@ -38,6 +41,7 @@ export default function Settings({
   onAccentChange,
   playerVisible,
   onPlayerVisibleChange,
+  sync,
 }: Props) {
   useEffect(() => {
     if (!open) return;
@@ -64,6 +68,8 @@ export default function Settings({
             ×
           </button>
         </header>
+
+        <AccountSync sync={sync} />
 
         <div className="setting">
           <span className="setting__label">Appearance</span>
