@@ -33,7 +33,7 @@ describe("account key lifecycle", () => {
       "correct horse",
       created.signup.wrapped_adk,
     );
-    expect(unlocked.authHash).toBe(created.signup.auth_hash);
+    expect(unlocked.auth_hash).toBe(created.signup.auth_hash);
 
     const blob = encryptBlob("hello notes", created.session.adk);
     expect(decryptBlob(blob.ciphertext, blob.nonce, unlocked.session.adk)).toBe("hello notes");
@@ -98,7 +98,7 @@ describe("integrity & isolation", () => {
   it("auth_hash is deterministic but not the wrapped key material", async () => {
     const a1 = await createAccount("d@b.com", "pw");
     const u = await unlockAccount("d@b.com", "pw", a1.signup.wrapped_adk);
-    expect(u.authHash).toBe(a1.signup.auth_hash);
-    expect(u.authHash).not.toBe(a1.signup.wrapped_adk);
+    expect(u.auth_hash).toBe(a1.signup.auth_hash);
+    expect(u.auth_hash).not.toBe(a1.signup.wrapped_adk);
   });
 });

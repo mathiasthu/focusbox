@@ -2,10 +2,16 @@ import _sodium from "libsodium-wrappers-sumo";
 
 let sodium: typeof _sodium;
 
-/** Must be awaited once before any other function in this module. */
+/** Must be awaited once before any other function in this module. Idempotent. */
 export async function initCrypto(): Promise<void> {
   await _sodium.ready;
   sodium = _sodium;
+}
+
+function ensureReady(): void {
+  if (!sodium) {
+    throw new Error("crypto not initialized — await initCrypto() before use");
+  }
 }
 
 // --- locked parameters (also recorded in kdf_params for forward-compat) ---
@@ -105,6 +111,7 @@ export interface CreatedAccount {
 }
 
 export async function createAccount(email: string, password: string): Promise<CreatedAccount> {
+  ensureReady();
   const { encKey, authKey } = deriveKeys(email, password);
   const adk = sodium.crypto_aead_xchacha20poly1305_ietf_keygen();
   const recoveryBytes = sodium.randombytes_buf(KEY_BYTES);
@@ -122,7 +129,8 @@ export async function createAccount(email: string, password: string): Promise<Cr
 }
 
 export interface Unlocked {
-  authHash: string;
+  // snake_case to match the server's JSON contract (auth_hash); same base64(authKey) value.
+  auth_hash: string;
   session: Session;
 }
 
@@ -131,15 +139,17 @@ export async function unlockAccount(
   password: string,
   wrappedAdk: string,
 ): Promise<Unlocked> {
+  ensureReady();
   const { encKey, authKey } = deriveKeys(email, password);
   const adk = aeadUnwrap(wrappedAdk, encKey); // throws if the password is wrong (AEAD auth fails)
-  return { authHash: sodium.to_base64(authKey), session: { adk, encKey } };
+  return { auth_hash: sodium.to_base64(authKey), session: { adk, encKey } };
 }
 
 export async function recoverWithKey(
   recoveryKey: string,
   recoveryWrappedAdk: string,
 ): Promise<Uint8Array> {
+  ensureReady();
   const recoveryBytes = sodium.from_base64(
     recoveryKey.trim(),
     sodium.base64_variants.URLSAFE_NO_PADDING,
@@ -153,6 +163,7 @@ export async function rewrapForNewPassword(
   newPassword: string,
   adk: Uint8Array,
 ): Promise<{ auth_hash: string; wrapped_adk: string; kdf_params: KdfParams }> {
+  ensureReady();
   const { encKey, authKey } = deriveKeys(email, newPassword);
   return {
     auth_hash: sodium.to_base64(authKey),
@@ -167,6 +178,7 @@ export interface EncryptedBlob {
 }
 
 export function encryptBlob(plaintext: string, adk: Uint8Array): EncryptedBlob {
+  ensureReady();
   const nonce = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
   const ct = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
     sodium.from_string(plaintext),
@@ -179,6 +191,7 @@ export function encryptBlob(plaintext: string, adk: Uint8Array): EncryptedBlob {
 }
 
 export function decryptBlob(ciphertext: string, nonce: string, adk: Uint8Array): string {
+  ensureReady();
   const pt = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
     null,
     sodium.from_base64(ciphertext),
