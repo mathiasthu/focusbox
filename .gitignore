@@ -15,6 +15,7 @@ dist-ssr
 # Local-only project docs / agent context (not for the public repo)
 CLAUDE.md
 HANDOFF.md
+MONETIZATION-IDEAS.md
 
 # Editor directories and files
 .vscode
