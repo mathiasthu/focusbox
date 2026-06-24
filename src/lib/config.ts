@@ -4,3 +4,9 @@ export const SUPPORT_URL = "https://buy.stripe.com/00w7sNcd1aCY6lEazB6g80O";
 
 // Shown in the Settings dialog. Keep in sync with package.json / tauri.conf.json.
 export const APP_VERSION = "0.1.7";
+
+// Cloud-sync API base URL (optional paid service). Override in dev via the
+// VITE_SYNC_API_URL env var; defaults to the production host.
+export const SYNC_API_URL =
+  (import.meta as { env?: Record<string, string> }).env?.VITE_SYNC_API_URL ??
+  "https://api.focusbox.net";
