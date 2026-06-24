@@ -142,6 +142,17 @@ describe("syncOnce orchestration", () => {
     expect(b.local.notes.doc).toEqual({ v: "B-edit" });
   });
 
+  it("normalizes a malformed (NaN) timestamp from a remote blob without poisoning the merge", async () => {
+    const server = new FakeServer();
+    // device A writes a task with a NaN timestamp (serializes to null on the wire)
+    await run(server, device({ tasks: [task("bad", { updated_at: NaN })] }), emptySyncState(), "A");
+    const b = await run(server, device({ tasks: [task("good", { updated_at: 5 })] }), emptySyncState(), "B");
+    const bad = b.local.tasks.find((t) => t.id === "bad");
+    expect(bad).toBeDefined();
+    expect(Number.isFinite(bad!.updated_at)).toBe(true); // coerced to a finite number
+    expect(b.local.tasks.map((t) => t.id).sort()).toEqual(["bad", "good"]);
+  });
+
   it("server only ever holds ciphertext (zero-knowledge through the engine)", async () => {
     const server = new FakeServer();
     await run(server, device({ tasks: [task("secret-task")] }), emptySyncState(), "A");

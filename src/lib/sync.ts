@@ -41,6 +41,16 @@ function stableEq(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+/** Coerce a numeric field to a finite number (defends the merge from a NaN/garbage
+ * value in a remote blob — blobs are authenticated, so this only guards client bugs). */
+function finite(n: unknown, fallback: number): number {
+  return typeof n === "number" && Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeTask(t: SyncedTask): SyncedTask {
+  return { ...t, updated_at: finite(t.updated_at, 0), order: finite(t.order, 0) };
+}
+
 async function pull<T>(
   api: SyncApi,
   token: string,
@@ -100,7 +110,7 @@ export async function syncOnce(opts: {
       let baseV = 0;
       if (serverV > 0) {
         const pr = await pull<TasksBlob>(api, token, adk, KEY_TASKS);
-        remote = pr.value.items ?? [];
+        remote = (pr.value.items ?? []).map(normalizeTask);
         baseV = pr.version;
       }
       const merged = mergeTasks(local.tasks, remote);
@@ -132,7 +142,7 @@ export async function syncOnce(opts: {
       let baseV = 0;
       if (serverV > 0) {
         const pr = await pull<SettingsValue>(api, token, adk, KEY_SETTINGS);
-        remote = pr.value;
+        remote = { ...pr.value, updated_at: finite(pr.value.updated_at, 0) };
         baseV = pr.version;
       }
       const merged = remote ? mergeSettings(local.settings, remote) : local.settings;
@@ -164,7 +174,7 @@ export async function syncOnce(opts: {
       let baseV = 0;
       if (serverV > 0) {
         const pr = await pull<NotesValue>(api, token, adk, KEY_NOTES);
-        remote = pr.value;
+        remote = { ...pr.value, updated_at: finite(pr.value.updated_at, 0) };
         baseV = pr.version;
       }
       if (!remote) {
