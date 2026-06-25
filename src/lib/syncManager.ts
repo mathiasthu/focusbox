@@ -581,21 +581,32 @@ export class SyncManager {
     conflicts: string[];
   }): Promise<void> {
     this.state = res.state;
-    this.notesUpdatedAt = res.local.notes.updated_at;
-    this.settingsUpdatedAt = res.local.settings.updated_at;
+    // A settings/notes change can land DURING a cycle whose local snapshot was already
+    // frozen (e.g. the user toggles the theme while a sync is in flight). The completing
+    // cycle merged from the OLD snapshot, so its result is stale for that blob: applying
+    // it would revert the user's change AND roll the semantic clock backwards. Detect the
+    // staleness, keep the newer timestamp, and leave that blob's UI value alone (the local
+    // value the user just set stays authoritative; the already-scheduled re-sync pushes it).
+    const settingsStale = res.local.settings.updated_at < this.settingsUpdatedAt;
+    const notesStale = res.local.notes.updated_at < this.notesUpdatedAt;
+    this.notesUpdatedAt = Math.max(this.notesUpdatedAt, res.local.notes.updated_at);
+    this.settingsUpdatedAt = Math.max(this.settingsUpdatedAt, res.local.settings.updated_at);
     if (res.conflicts.length) this.hadNotesConflict = true;
     // Persist the sync metadata (versions + baselines) durably BEFORE advancing the
     // UI/local data. If the write fails it propagates to syncNow() and surfaces as a
     // sync error, instead of the UI getting ahead of a baseline that never saved.
     await this.persistIdentity();
+    const cur = settingsStale || notesStale ? this.d.getLocal() : null;
     this.d.onMerged({
       tasks: res.local.tasks,
-      notesDoc: res.local.notes.doc,
-      settings: {
-        theme: res.local.settings.theme,
-        accent: res.local.settings.accent,
-        spotifyEnabled: res.local.settings.spotifyEnabled,
-      },
+      notesDoc: notesStale ? cur!.notesDoc : res.local.notes.doc,
+      settings: settingsStale
+        ? cur!.settings
+        : {
+            theme: res.local.settings.theme,
+            accent: res.local.settings.accent,
+            spotifyEnabled: res.local.settings.spotifyEnabled,
+          },
     });
   }
 

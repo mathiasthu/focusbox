@@ -681,6 +681,14 @@ body::after {
   color: var(--on-accent);
   opacity: 0.8;
 }
+/* Hovering the ACTIVE chip: .chip:hover (higher specificity) would set accent-colored
+   text over the accent fill, making the number vanish. Keep on-accent text and darken
+   the fill for hover feedback instead. */
+.chip--active:hover {
+  background: var(--accent-deep);
+  border-color: var(--accent-deep);
+  color: var(--on-accent);
+}
 
 .timer__controls {
   display: flex;
@@ -1093,12 +1101,19 @@ body::after {
   gap: 10px;
 }
 .notes__editor ul[data-type="taskList"] li > label {
-  margin-top: 0.35em;
+  /* Nudge the 18px box onto the centre of the first text line (line-height 1.7). */
+  margin-top: 0.18em;
   user-select: none;
 }
 .notes__editor ul[data-type="taskList"] li > div {
   flex: 1;
   min-width: 0;
+}
+/* The item's paragraph is NOT a direct ProseMirror child, so it keeps the browser's
+   default 1em block margins — which shove the text ~12px below the checkbox. Reset it so
+   the first line sits next to the box (the checkbox's 0.35em nudge aligns the centers). */
+.notes__editor ul[data-type="taskList"] li > div > p {
+  margin: 0;
 }
 .notes__editor ul[data-type="taskList"] input[type="checkbox"] {
   appearance: none;
