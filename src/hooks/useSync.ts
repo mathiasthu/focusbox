@@ -44,6 +44,7 @@ export interface SyncController extends SyncSnapshot {
   getConflict: (key: string) => Promise<ConflictContent>;
   restoreConflict: (key: string) => Promise<void>;
   discardConflict: (key: string) => Promise<void>;
+  deleteAccount: () => Promise<void>;
 }
 
 const SIGNED_OUT: SyncSnapshot = {
@@ -143,5 +144,6 @@ export function useSync(args: {
       mgrRef.current?.getConflict(key) ?? Promise.reject(new Error("sync not ready")),
     restoreConflict: (key) => mgrRef.current?.restoreConflict(key) ?? Promise.resolve(),
     discardConflict: (key) => mgrRef.current?.discardConflict(key) ?? Promise.resolve(),
+    deleteAccount: () => mgrRef.current?.deleteAccount() ?? Promise.resolve(),
   };
 }

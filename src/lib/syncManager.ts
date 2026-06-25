@@ -369,6 +369,13 @@ export class SyncManager {
     return url;
   }
 
+  /** Delete the cloud account (server purges blobs + cancels the subscription), then sign
+   * out. Local tasks/notes are untouched — logout() clears only the sync identity. */
+  async deleteAccount(): Promise<void> {
+    await this.authedCall((t) => this.d.api.deleteAccount(t));
+    await this.logout();
+  }
+
   // ---- notes conflict copies (P3b) ----
 
   async listConflicts(): Promise<ConflictMeta[]> {

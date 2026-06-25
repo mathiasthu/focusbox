@@ -425,4 +425,18 @@ describe("SyncManager", () => {
     await a.mgr.discardConflict(ckey);
     expect((await a.mgr.listConflicts()).map((c) => c.key)).not.toContain(ckey);
   });
+
+  it("deletes the account, signs out, and leaves local data intact", async () => {
+    const api = new FakeBackend();
+    const a = makeDevice(api, "A", { tasks: [task("keep")], notesDoc: { v: "mine" } });
+    await a.mgr.signup("del@e.com", "pw");
+    expect(api.users.has("del@e.com")).toBe(true);
+
+    await a.mgr.deleteAccount();
+    expect(api.users.has("del@e.com")).toBe(false); // server account gone
+    expect(a.mgr.snapshot().status).toBe("signed-out");
+    expect(a.persist.value).toBeNull(); // session cleared
+    expect(a.local.tasks.map((t) => t.id)).toEqual(["keep"]); // local data untouched
+    expect(a.local.notesDoc).toEqual({ v: "mine" });
+  });
 });

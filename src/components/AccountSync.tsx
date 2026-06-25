@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { SyncController } from "../hooks/useSync";
 import RecoverForm from "./RecoverForm";
 import NotesConflicts from "./NotesConflicts";
+import DeleteAccount from "./DeleteAccount";
 
 function relativeTime(ts: number | null): string {
   if (!ts) return "";
@@ -277,6 +278,7 @@ export default function AccountSync({ sync }: Props) {
           Log out
         </button>
       </div>
+      <DeleteAccount sync={sync} />
     </div>
   );
 }
