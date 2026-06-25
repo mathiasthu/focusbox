@@ -48,6 +48,7 @@ class FakeBackend implements SyncApi, AuthApi, BillingApi {
   billingEnabled = false;
   syncAllowed = true;
   subscriptionStatus = "none";
+  transientFail = 0; // when > 0, getManifest throws a network error and decrements
 
   private mk(kind: string, email: string): string {
     return `${kind}:${email}:${this.n++}`;
@@ -119,6 +120,10 @@ class FakeBackend implements SyncApi, AuthApi, BillingApi {
     return { access_token: this.mk("access", body.email), refresh_token: this.mk("refresh", body.email), token_type: "bearer" };
   }
   async getManifest(token: string): Promise<ManifestEntry[]> {
+    if (this.transientFail > 0) {
+      this.transientFail--;
+      throw new TypeError("network down");
+    }
     const email = this.auth(token);
     return [...this.bf(email).entries()].map(([key, b]) => ({
       key,
@@ -184,6 +189,36 @@ class FakeBackend implements SyncApi, AuthApi, BillingApi {
 let clock = 1000;
 const now = () => ++clock;
 
+function makeFakeScheduler() {
+  const tasks: { id: number; fn: () => void; ms: number }[] = [];
+  let id = 0;
+  return {
+    scheduler: {
+      set: (fn: () => void, ms: number) => {
+        const t = { id: id++, fn, ms };
+        tasks.push(t);
+        return t.id;
+      },
+      clear: (h: unknown) => {
+        const i = tasks.findIndex((t) => t.id === h);
+        if (i >= 0) tasks.splice(i, 1);
+      },
+    },
+    // Fire the oldest pending timer, then flush all microtasks (so the async syncNow
+    // it triggers runs to completion before we assert).
+    runNext: async () => {
+      const t = tasks.shift();
+      if (t) t.fn();
+      await new Promise((r) => setTimeout(r, 0));
+    },
+    pending: () => tasks.length,
+    lastMs: () => (tasks.length ? tasks[tasks.length - 1].ms : null),
+  };
+}
+
+/** Flush pending microtasks after a fire-and-forget (void) async call. */
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
 interface Device {
   mgr: SyncManager;
   local: LocalSnapshot;
@@ -191,7 +226,12 @@ interface Device {
   ctl: { failSave: boolean };
 }
 
-function makeDevice(api: FakeBackend, name: string, local?: Partial<LocalSnapshot>): Device {
+function makeDevice(
+  api: FakeBackend,
+  name: string,
+  local?: Partial<LocalSnapshot>,
+  scheduler?: { set: (fn: () => void, ms: number) => unknown; clear: (h: unknown) => void },
+): Device {
   const state: LocalSnapshot = {
     tasks: [],
     notesDoc: null,
@@ -222,6 +262,7 @@ function makeDevice(api: FakeBackend, name: string, local?: Partial<LocalSnapsho
       state.settings = m.settings;
     },
     onChange: () => {},
+    ...(scheduler ? { scheduler } : {}),
   });
   return { mgr, local: state, persist, ctl };
 }
@@ -438,5 +479,91 @@ describe("SyncManager", () => {
     expect(a.persist.value).toBeNull(); // session cleared
     expect(a.local.tasks.map((t) => t.id)).toEqual(["keep"]); // local data untouched
     expect(a.local.notesDoc).toEqual({ v: "mine" });
+  });
+
+  it("retries a transient failure after backoff, then succeeds", async () => {
+    const api = new FakeBackend();
+    const fk = makeFakeScheduler();
+    const a = makeDevice(api, "A", { tasks: [task("t1")] }, fk.scheduler);
+    await a.mgr.signup("off@e.com", "pw"); // first sync succeeds (transientFail=0)
+    api.transientFail = 1;
+    a.local.tasks = [...a.local.tasks, task("t2")];
+    await a.mgr.syncNow();
+    expect(a.mgr.snapshot().status).toBe("error");
+    expect(a.mgr.snapshot().lastError).toMatch(/retry/i);
+    expect(fk.pending()).toBe(1);
+    expect(fk.lastMs()).toBe(2000);
+    await fk.runNext(); // backoff fires, this time the manifest succeeds
+    expect(a.mgr.snapshot().status).toBe("idle");
+  });
+
+  it("grows backoff exponentially and caps at 60s", async () => {
+    const api = new FakeBackend();
+    const fk = makeFakeScheduler();
+    const a = makeDevice(api, "A", { tasks: [task("t1")] }, fk.scheduler);
+    await a.mgr.signup("cap@e.com", "pw");
+    api.transientFail = 100; // always fails
+    await a.mgr.syncNow();
+    const seen = [fk.lastMs()];
+    for (let i = 0; i < 6; i++) {
+      await fk.runNext();
+      seen.push(fk.lastMs());
+    }
+    expect(seen).toEqual([2000, 4000, 8000, 16000, 32000, 60000, 60000]);
+  });
+
+  it("a successful sync resets the backoff", async () => {
+    const api = new FakeBackend();
+    const fk = makeFakeScheduler();
+    const a = makeDevice(api, "A", { tasks: [task("t1")] }, fk.scheduler);
+    await a.mgr.signup("reset@e.com", "pw");
+    api.transientFail = 1;
+    await a.mgr.syncNow();
+    expect(fk.lastMs()).toBe(2000);
+    await fk.runNext(); // succeeds -> reset
+    expect(a.mgr.snapshot().status).toBe("idle");
+    api.transientFail = 1;
+    await a.mgr.syncNow();
+    expect(fk.lastMs()).toBe(2000); // base again, not 4000
+  });
+
+  it("does not auto-retry on terminal needs-relogin", async () => {
+    const api = new FakeBackend();
+    const fk = makeFakeScheduler();
+    const a = makeDevice(api, "A", { tasks: [task("t1")] }, fk.scheduler);
+    await a.mgr.signup("term@e.com", "pw");
+    api.failAuthOnce = true;
+    api.breakRefresh = true;
+    await a.mgr.syncNow();
+    expect(a.mgr.snapshot().status).toBe("needs-relogin");
+    expect(fk.pending()).toBe(0); // no backoff timer
+  });
+
+  it("onOnline cancels backoff and syncs immediately", async () => {
+    const api = new FakeBackend();
+    const fk = makeFakeScheduler();
+    const a = makeDevice(api, "A", { tasks: [task("t1")] }, fk.scheduler);
+    await a.mgr.signup("on@e.com", "pw");
+    api.transientFail = 1;
+    await a.mgr.syncNow();
+    expect(fk.pending()).toBe(1);
+    api.transientFail = 0;
+    a.mgr.onOnline();
+    await flush();
+    expect(fk.pending()).toBe(0); // backoff cancelled
+    expect(a.mgr.snapshot().status).toBe("idle");
+  });
+
+  it("logout clears a pending backoff timer", async () => {
+    const api = new FakeBackend();
+    const fk = makeFakeScheduler();
+    const a = makeDevice(api, "A", { tasks: [task("t1")] }, fk.scheduler);
+    await a.mgr.signup("lo@e.com", "pw");
+    api.transientFail = 5;
+    await a.mgr.syncNow();
+    expect(fk.pending()).toBe(1);
+    await a.mgr.logout();
+    expect(fk.pending()).toBe(0);
+    expect(a.mgr.snapshot().status).toBe("signed-out");
   });
 });

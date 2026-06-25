@@ -63,6 +63,17 @@ export interface SyncSnapshot {
   currentPeriodEnd: number | null; // epoch ms
 }
 
+/** Injectable timer seam so tests can drive debounce + offline backoff deterministically. */
+export interface Scheduler {
+  set(fn: () => void, ms: number): unknown;
+  clear(handle: unknown): void;
+}
+
+const defaultScheduler: Scheduler = {
+  set: (fn, ms) => setTimeout(fn, ms),
+  clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+};
+
 export interface SyncManagerDeps {
   api: SyncApi & AuthApi & BillingApi;
   now: () => number;
@@ -76,6 +87,7 @@ export interface SyncManagerDeps {
   onMerged: (m: MergedSnapshot) => void;
   onChange: () => void;
   debounceMs?: number;
+  scheduler?: Scheduler;
 }
 
 function messageFor(e: unknown, fallback: string): string {
@@ -111,10 +123,14 @@ export class SyncManager {
 
   private running = false;
   private queued = false;
-  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private debounceTimer: unknown = null;
+  private backoffHandle: unknown = null;
+  private backoffMs = 0;
+  private readonly backoffBaseMs = 2000;
+  private readonly backoffCapMs = 60000;
 
   constructor(deps: SyncManagerDeps) {
-    this.d = { debounceMs: 800, ...deps };
+    this.d = { debounceMs: 800, scheduler: defaultScheduler, ...deps };
   }
 
   snapshot(): SyncSnapshot {
@@ -242,8 +258,10 @@ export class SyncManager {
   }
 
   async logout(): Promise<void> {
-    if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    if (this.debounceTimer) this.d.scheduler.clear(this.debounceTimer);
     this.debounceTimer = null;
+    this.clearBackoff();
+    this.backoffMs = 0;
     if (this.adk) this.adk.fill(0);
     this.adk = null;
     this.email = null;
@@ -273,8 +291,11 @@ export class SyncManager {
   /** Debounced trigger; call on any local change. */
   scheduleSync(): void {
     if (this.status === "signed-out") return;
-    if (this.debounceTimer) clearTimeout(this.debounceTimer);
-    this.debounceTimer = setTimeout(() => {
+    // A fresh local change resets any pending offline backoff cycle.
+    this.clearBackoff();
+    this.backoffMs = 0;
+    if (this.debounceTimer) this.d.scheduler.clear(this.debounceTimer);
+    this.debounceTimer = this.d.scheduler.set(() => {
       this.debounceTimer = null;
       void this.syncNow();
     }, this.d.debounceMs);
@@ -316,6 +337,8 @@ export class SyncManager {
       } while (this.queued);
       this.status = "idle";
       this.lastSyncedAt = this.d.now();
+      this.backoffMs = 0;
+      this.clearBackoff();
     } catch (e) {
       if (e instanceof PaymentRequiredError) {
         // subscription lapsed mid-session: pause and re-confirm from /account/me
@@ -325,6 +348,11 @@ export class SyncManager {
       } else if (e instanceof UnauthorizedError) {
         this.status = "needs-relogin";
         this.lastError = messageFor(e, "Sync failed.");
+      } else if (this.isTransient(e)) {
+        // Network/5xx: keep the local app working and auto-retry with backoff.
+        this.status = "error";
+        this.lastError = "Offline — retrying…";
+        this.scheduleBackoff();
       } else {
         this.status = "error";
         this.lastError = messageFor(e, "Sync failed.");
@@ -333,6 +361,37 @@ export class SyncManager {
       this.running = false;
       this.emit();
     }
+  }
+
+  /** A failure worth auto-retrying: a network error or a 5xx. (401/402 are terminal and
+   * handled before this is reached.) */
+  private isTransient(e: unknown): boolean {
+    return e instanceof TypeError || (e instanceof ApiError && e.status >= 500);
+  }
+
+  private scheduleBackoff(): void {
+    this.clearBackoff();
+    this.backoffMs =
+      this.backoffMs === 0 ? this.backoffBaseMs : Math.min(this.backoffMs * 2, this.backoffCapMs);
+    this.backoffHandle = this.d.scheduler.set(() => {
+      this.backoffHandle = null;
+      void this.syncNow();
+    }, this.backoffMs);
+  }
+
+  private clearBackoff(): void {
+    if (this.backoffHandle !== null) {
+      this.d.scheduler.clear(this.backoffHandle);
+      this.backoffHandle = null;
+    }
+  }
+
+  /** Connectivity returned: cancel any pending backoff and sync now. */
+  onOnline(): void {
+    if (this.status === "signed-out") return;
+    this.clearBackoff();
+    this.backoffMs = 0;
+    void this.syncNow();
   }
 
   /** Fetch subscription status from the server (non-fatal on failure). */
