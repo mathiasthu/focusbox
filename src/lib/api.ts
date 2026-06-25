@@ -6,6 +6,7 @@ export interface SignupBody {
   auth_hash: string;
   wrapped_adk: string;
   recovery_wrapped_adk: string;
+  recovery_auth_hash: string;
   kdf_params: KdfParams;
 }
 
@@ -18,6 +19,19 @@ export interface Tokens {
 export interface LoginResult extends Tokens {
   wrapped_adk: string;
   recovery_wrapped_adk: string;
+  kdf_params: KdfParams;
+}
+
+export interface RecoverStartResult {
+  recovery_wrapped_adk: string;
+  kdf_params: KdfParams;
+}
+
+export interface RecoverCompleteBody {
+  email: string;
+  recovery_auth_hash: string;
+  new_auth_hash: string;
+  new_wrapped_adk: string;
   kdf_params: KdfParams;
 }
 
@@ -95,6 +109,7 @@ export interface BillingApi {
   getAccount(token: string): Promise<AccountInfo>;
   createCheckout(token: string, plan: Plan): Promise<{ url: string }>;
   createPortal(token: string): Promise<{ url: string }>;
+  deleteAccount(token: string): Promise<void>;
 }
 
 /** The blob-sync surface the orchestrator depends on (injectable for tests). */
@@ -109,6 +124,8 @@ export interface AuthApi {
   signup(email: string, body: Omit<SignupBody, "email">): Promise<Tokens>;
   login(email: string, authHash: string): Promise<LoginResult>;
   refresh(refreshToken: string): Promise<{ access_token: string }>;
+  recoverStart(email: string, recoveryAuthHash: string): Promise<RecoverStartResult>;
+  recoverComplete(body: RecoverCompleteBody): Promise<Tokens>;
 }
 
 /** A fetch-compatible function. In the Tauri app we inject `@tauri-apps/plugin-http`'s
@@ -171,6 +188,20 @@ export function createHttpApi(
       });
       return r.json();
     },
+    async recoverStart(email, recoveryAuthHash) {
+      const r = await request(baseUrl, "/v1/auth/recover/start", fetchImpl, {
+        method: "POST",
+        body: { email, recovery_auth_hash: recoveryAuthHash },
+      });
+      return r.json();
+    },
+    async recoverComplete(body) {
+      const r = await request(baseUrl, "/v1/auth/recover/complete", fetchImpl, {
+        method: "POST",
+        body,
+      });
+      return r.json();
+    },
     async getManifest(token) {
       const r = await request(baseUrl, "/v1/sync", fetchImpl, { token });
       return (await r.json()).blobs;
@@ -204,6 +235,9 @@ export function createHttpApi(
     async createPortal(token) {
       const r = await request(baseUrl, "/v1/billing/portal", fetchImpl, { method: "POST", token });
       return r.json();
+    },
+    async deleteAccount(token) {
+      await request(baseUrl, "/v1/account", fetchImpl, { method: "DELETE", token });
     },
   };
 }
