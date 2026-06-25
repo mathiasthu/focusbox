@@ -646,4 +646,37 @@ describe("SyncManager", () => {
     expect(a.mgr.snapshot().status).toBe("signed-out"); // not "error"
     expect(fk.pending()).toBe(0); // no orphaned backoff timer
   });
+
+  it("a settings change made DURING an in-flight sync is not reverted by the completing cycle", async () => {
+    // Repro of the theme-toggle revert: the user flips the theme while a sync cycle
+    // (whose snapshot was frozen BEFORE the flip) is still in flight. The completing
+    // cycle must NOT roll the user's choice back to the stale snapshot value.
+    const api = new FakeBackend();
+    const fk = makeFakeScheduler();
+    const a = makeDevice(
+      api,
+      "A",
+      { settings: { theme: "dark", accent: "clay", spotifyEnabled: true } },
+      fk.scheduler,
+    );
+    await a.mgr.signup("theme-race@e.com", "pw"); // initial push: settings(theme=dark)
+    expect(a.local.settings.theme).toBe("dark");
+
+    // Start a cycle that blocks in-flight; its snapshot is frozen at theme=dark.
+    let release!: () => void;
+    api.gate = new Promise<void>((r) => (release = r));
+    const p = a.mgr.syncNow();
+    await flush(); // reach the gated getManifest
+
+    // User switches the theme while the cycle is in flight (mirrors changeTheme()).
+    a.local.settings = { ...a.local.settings, theme: "light" };
+    a.mgr.notifySettingsChanged(now());
+
+    // Cycle completes.
+    api.gate = null;
+    release();
+    await p;
+
+    expect(a.local.settings.theme).toBe("light"); // the user's choice must survive
+  });
 });
