@@ -249,6 +249,9 @@ body::after {
 
 .modal {
   width: min(420px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 16px;
