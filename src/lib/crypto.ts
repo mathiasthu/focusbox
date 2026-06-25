@@ -19,6 +19,9 @@ const KDF_CTX = "fbsync01"; // 8 bytes, crypto_kdf context
 const SUBKEY_ENC = 1;
 const SUBKEY_AUTH = 2;
 const KEY_BYTES = 32;
+// Keyed-BLAKE2b domain separation: the recovery auth hash must be independent of the
+// recovery WRAP key (which is the null-keyed generichash of the same bytes).
+const RECOVERY_AUTH_PERSONAL = "fbsync01-recovery-auth";
 
 export interface KdfParams {
   alg: "argon2id";
@@ -91,11 +94,20 @@ function recoveryWrapKey(recoveryKeyBytes: Uint8Array): Uint8Array {
   return sodium.crypto_generichash(KEY_BYTES, recoveryKeyBytes, null);
 }
 
+function recoveryAuthBytes(recoveryKeyBytes: Uint8Array): Uint8Array {
+  return sodium.crypto_generichash(
+    KEY_BYTES,
+    recoveryKeyBytes,
+    sodium.from_string(RECOVERY_AUTH_PERSONAL),
+  );
+}
+
 // --- public API ---
 export interface SignupPayload {
   auth_hash: string;
   wrapped_adk: string;
   recovery_wrapped_adk: string;
+  recovery_auth_hash: string;
   kdf_params: KdfParams;
 }
 
@@ -121,6 +133,7 @@ export async function createAccount(email: string, password: string): Promise<Cr
       auth_hash: sodium.to_base64(authKey),
       wrapped_adk: aeadWrap(adk, encKey),
       recovery_wrapped_adk: aeadWrap(adk, recoveryWrapKey(recoveryBytes)),
+      recovery_auth_hash: sodium.to_base64(recoveryAuthBytes(recoveryBytes)),
       kdf_params: kdfParams(),
     },
     recoveryKey,
@@ -177,6 +190,17 @@ export function adkToBase64(adk: Uint8Array): string {
 export function adkFromBase64(b64: string): Uint8Array {
   ensureReady();
   return sodium.from_base64(b64);
+}
+
+/** Recompute the recovery auth hash from the user-entered recovery key (for the
+ * recover flow). Throws if the key isn't valid base64url. */
+export function recoveryAuthHashFromKey(recoveryKey: string): string {
+  ensureReady();
+  const recoveryBytes = sodium.from_base64(
+    recoveryKey.trim(),
+    sodium.base64_variants.URLSAFE_NO_PADDING,
+  );
+  return sodium.to_base64(recoveryAuthBytes(recoveryBytes));
 }
 
 export async function recoverWithKey(

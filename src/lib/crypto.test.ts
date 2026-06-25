@@ -9,6 +9,7 @@ import {
   adkToBase64,
   adkFromBase64,
   recoverWithKey,
+  recoveryAuthHashFromKey,
   rewrapForNewPassword,
   encryptBlob,
   decryptBlob,
@@ -89,6 +90,21 @@ describe("recovery", () => {
     const rewrapped = await rewrapForNewPassword("rw@b.com", "new", adk);
     const unlocked = await unlockAccount("rw@b.com", "new", rewrapped.wrapped_adk);
     expect(sodium_equal(unlocked.session.adk, c.session.adk)).toBe(true);
+  });
+
+  it("derives a recovery_auth_hash at signup, recomputable from the key", async () => {
+    const c = await createAccount("rah@b.com", "pw");
+    expect(c.signup.recovery_auth_hash).toBeTypeOf("string");
+    // recomputing from the recovery key alone reproduces the same value
+    expect(recoveryAuthHashFromKey(c.recoveryKey)).toBe(c.signup.recovery_auth_hash);
+  });
+
+  it("recovery_auth_hash is independent of the recovery wrap (different accounts differ)", async () => {
+    const a = await createAccount("rah1@b.com", "pw");
+    const b = await createAccount("rah2@b.com", "pw");
+    expect(a.signup.recovery_auth_hash).not.toBe(b.signup.recovery_auth_hash);
+    // and it is NOT equal to the wrapped-adk material
+    expect(a.signup.recovery_auth_hash).not.toBe(a.signup.recovery_wrapped_adk);
   });
 });
 
