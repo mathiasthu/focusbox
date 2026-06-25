@@ -8,6 +8,7 @@ import {
   SyncManager,
   type LocalSnapshot,
   type MergedSnapshot,
+  type Plan,
   type SyncSnapshot,
 } from "../lib/syncManager";
 
@@ -34,6 +35,8 @@ export interface SyncController extends SyncSnapshot {
   notifyTasksChanged: () => void;
   notifyNotesChanged: (at: number) => void;
   notifySettingsChanged: (at: number) => void;
+  startCheckout: (plan: Plan) => Promise<string>;
+  openPortal: () => Promise<string>;
 }
 
 const SIGNED_OUT: SyncSnapshot = {
@@ -43,6 +46,10 @@ const SIGNED_OUT: SyncSnapshot = {
   lastError: null,
   recoveryKey: null,
   hadNotesConflict: false,
+  billingEnabled: false,
+  syncEnabled: true,
+  subscriptionStatus: "none",
+  currentPeriodEnd: null,
 };
 
 /**
@@ -95,7 +102,11 @@ export function useSync(args: {
     })();
 
     const onFocus = () => {
-      void mgrRef.current?.syncNow();
+      const m = mgrRef.current;
+      if (!m) return;
+      // Re-check the subscription (e.g. just returned from Stripe Checkout/Portal),
+      // then sync.
+      void m.refreshAccount().then(() => m.syncNow());
     };
     window.addEventListener("focus", onFocus);
     return () => {
@@ -115,5 +126,9 @@ export function useSync(args: {
     notifyTasksChanged: () => mgrRef.current?.notifyTasksChanged(),
     notifyNotesChanged: (at) => mgrRef.current?.notifyNotesChanged(at),
     notifySettingsChanged: (at) => mgrRef.current?.notifySettingsChanged(at),
+    startCheckout: (plan) =>
+      mgrRef.current?.startCheckout(plan) ?? Promise.reject(new Error("sync not ready")),
+    openPortal: () =>
+      mgrRef.current?.openPortal() ?? Promise.reject(new Error("sync not ready")),
   };
 }

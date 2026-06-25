@@ -3,11 +3,15 @@ import { initCrypto } from "./crypto";
 import {
   ApiError,
   ConflictError,
+  PaymentRequiredError,
   UnauthorizedError,
+  type AccountInfo,
   type AuthApi,
+  type BillingApi,
   type BlobData,
   type LoginResult,
   type ManifestEntry,
+  type Plan,
   type PushBody,
   type PushResult,
   type SignupBody,
@@ -24,7 +28,7 @@ import type { SyncedTask } from "./syncTypes";
 
 // A single shared backend implementing auth + per-user encrypted blob storage,
 // mirroring the real server's optimistic-concurrency semantics.
-class FakeBackend implements SyncApi, AuthApi {
+class FakeBackend implements SyncApi, AuthApi, BillingApi {
   users = new Map<
     string,
     { auth_hash: string; wrapped_adk: string; recovery_wrapped_adk: string; kdf_params: unknown }
@@ -33,6 +37,11 @@ class FakeBackend implements SyncApi, AuthApi {
   private n = 0;
   failAuthOnce = false;
   breakRefresh = false;
+  // billing gate: when billingEnabled && !syncAllowed, pushes 402 and /account/me
+  // reports sync_enabled=false (mirrors the real server's gating).
+  billingEnabled = false;
+  syncAllowed = true;
+  subscriptionStatus = "none";
 
   private mk(kind: string, email: string): string {
     return `${kind}:${email}:${this.n++}`;
@@ -99,6 +108,7 @@ class FakeBackend implements SyncApi, AuthApi {
   }
   async pushBlob(token: string, body: PushBody): Promise<PushResult> {
     const email = this.auth(token);
+    if (this.billingEnabled && !this.syncAllowed) throw new PaymentRequiredError();
     const m = this.bf(email);
     const base = body.base_version ?? 0;
     const cur = m.get(body.key);
@@ -116,6 +126,24 @@ class FakeBackend implements SyncApi, AuthApi {
   async deleteBlob(token: string, key: string): Promise<void> {
     const email = this.auth(token);
     this.bf(email).delete(key);
+  }
+  async getAccount(token: string): Promise<AccountInfo> {
+    const email = this.auth(token);
+    return {
+      email,
+      billing_enabled: this.billingEnabled,
+      sync_enabled: this.billingEnabled ? this.syncAllowed : true,
+      subscription_status: this.subscriptionStatus,
+      current_period_end: null,
+    };
+  }
+  async createCheckout(token: string, plan: Plan): Promise<{ url: string }> {
+    this.auth(token);
+    return { url: `https://checkout.stripe.com/c/${plan}` };
+  }
+  async createPortal(token: string): Promise<{ url: string }> {
+    this.auth(token);
+    return { url: "https://billing.stripe.com/p/test" };
   }
   conflictKeys(email: string): string[] {
     return [...this.bf(email).keys()].filter((k) => k.startsWith("notes_conflict:"));
@@ -258,6 +286,49 @@ describe("SyncManager", () => {
     await a.mgr.signup("persistfail@e.com", "pw");
     expect(a.mgr.snapshot().status).toBe("error");
     expect(a.mgr.snapshot().lastError).toBeTruthy();
+  });
+
+  it("pauses (does not push) when the subscription is inactive, then resumes once active", async () => {
+    const api = new FakeBackend();
+    api.billingEnabled = true;
+    api.syncAllowed = false; // no active subscription yet
+    const a = makeDevice(api, "A", { tasks: [task("t1")] });
+    await a.mgr.signup("pause@e.com", "pw");
+    expect(a.mgr.snapshot().status).toBe("paused");
+    expect(a.mgr.snapshot().billingEnabled).toBe(true);
+    expect(a.mgr.snapshot().syncEnabled).toBe(false);
+    expect(api.blobs.get("pause@e.com")?.get("tasks")).toBeUndefined(); // nothing pushed
+
+    // subscription becomes active; a refresh + sync now pushes
+    api.syncAllowed = true;
+    await a.mgr.refreshAccount();
+    await a.mgr.syncNow();
+    expect(a.mgr.snapshot().status).toBe("idle");
+    expect(api.blobs.get("pause@e.com")?.get("tasks")).toBeDefined();
+  });
+
+  it("transitions to paused if a push is rejected mid-session (402)", async () => {
+    const api = new FakeBackend();
+    const a = makeDevice(api, "A", { tasks: [task("t1")] });
+    await a.mgr.signup("lapse@e.com", "pw"); // billing off at signup -> idle
+    expect(a.mgr.snapshot().status).toBe("idle");
+    // subscription lapses
+    api.billingEnabled = true;
+    api.syncAllowed = false;
+    a.local.tasks = [...a.local.tasks, task("t2")];
+    a.mgr.notifyTasksChanged();
+    await a.mgr.syncNow();
+    expect(a.mgr.snapshot().status).toBe("paused");
+    expect(a.mgr.snapshot().syncEnabled).toBe(false);
+  });
+
+  it("startCheckout and openPortal return Stripe URLs", async () => {
+    const api = new FakeBackend();
+    api.billingEnabled = true;
+    const a = makeDevice(api, "A");
+    await a.mgr.signup("buy@e.com", "pw");
+    expect(await a.mgr.startCheckout("monthly")).toMatch(/checkout\.stripe\.com/);
+    expect(await a.mgr.openPortal()).toMatch(/billing\.stripe\.com/);
   });
 
   it("surfaces a friendly error for a wrong-password login", async () => {

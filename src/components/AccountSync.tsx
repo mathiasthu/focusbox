@@ -13,6 +13,42 @@ function relativeTime(ts: number | null): string {
   return `${Math.round(hrs / 24)}d ago`;
 }
 
+function formatDate(ms: number | null): string {
+  if (!ms) return "";
+  try {
+    return new Date(ms).toLocaleDateString();
+  } catch {
+    return "";
+  }
+}
+
+/** Defense-in-depth: only ever open a URL whose host is a Stripe domain. The Tauri opener
+ * capability already scopes to https://*.stripe.com/*, but the dev/browser path
+ * (window.open) has no such guard, so validate against a compromised API response. */
+function isStripeUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && (u.hostname === "stripe.com" || u.hostname.endsWith(".stripe.com"));
+  } catch {
+    return false;
+  }
+}
+
+// Opens a Stripe Checkout / Portal URL in the user's browser (Tauri opener, or a new
+// tab in the dev preview).
+async function openExternal(url: string) {
+  if (!isStripeUrl(url)) {
+    console.error("Focusbox: refusing to open a non-Stripe billing URL.", url);
+    return;
+  }
+  if ("__TAURI_INTERNALS__" in window) {
+    const { openUrl } = await import("@tauri-apps/plugin-opener");
+    await openUrl(url);
+  } else {
+    window.open(url, "_blank", "noopener");
+  }
+}
+
 interface Props {
   sync: SyncController;
 }
@@ -23,6 +59,31 @@ export default function AccountSync({ sync }: Props) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [billingBusy, setBillingBusy] = useState(false);
+
+  async function startTrial(plan: "monthly" | "annual") {
+    if (billingBusy) return;
+    setBillingBusy(true);
+    try {
+      await openExternal(await sync.startCheckout(plan));
+    } catch (e) {
+      console.error("Focusbox: couldn't start checkout.", e);
+    } finally {
+      setBillingBusy(false);
+    }
+  }
+
+  async function manageSubscription() {
+    if (billingBusy) return;
+    setBillingBusy(true);
+    try {
+      await openExternal(await sync.openPortal());
+    } catch (e) {
+      console.error("Focusbox: couldn't open the billing portal.", e);
+    } finally {
+      setBillingBusy(false);
+    }
+  }
 
   async function run(action: (e: string, p: string) => Promise<void>) {
     if (busy) return;
@@ -131,17 +192,20 @@ export default function AccountSync({ sync }: Props) {
   const statusText =
     sync.status === "syncing"
       ? "Syncing…"
-      : sync.status === "error"
-        ? sync.lastError ?? "Sync error"
-        : sync.lastSyncedAt
-          ? `Synced ${relativeTime(sync.lastSyncedAt)}`
-          : "Synced";
+      : sync.status === "paused"
+        ? "Sync paused"
+        : sync.status === "error"
+          ? sync.lastError ?? "Sync error"
+          : sync.lastSyncedAt
+            ? `Synced ${relativeTime(sync.lastSyncedAt)}`
+            : "Synced";
+  const statusBad = sync.status === "error" || sync.status === "paused";
 
   return (
     <div className="setting setting--col account">
       <span className="setting__label">Cloud sync</span>
       <span className="account__email">{sync.email}</span>
-      <span className={`account__status${sync.status === "error" ? " account__status--error" : ""}`}>
+      <span className={`account__status${statusBad ? " account__status--error" : ""}`}>
         {statusText}
       </span>
       {sync.hadNotesConflict && (
@@ -149,6 +213,51 @@ export default function AccountSync({ sync }: Props) {
           A conflicting notes edit was saved as a backup copy on the server.
         </span>
       )}
+
+      {sync.billingEnabled &&
+        (sync.syncEnabled ? (
+          <div className="account__billing">
+            <span className="setting__hint">
+              {sync.subscriptionStatus === "trialing" ? "Free trial" : "Subscribed"}
+              {sync.currentPeriodEnd ? ` — renews ${formatDate(sync.currentPeriodEnd)}` : ""}
+            </span>
+            <button className="account__btn" onClick={() => void manageSubscription()} disabled={billingBusy}>
+              Manage subscription
+            </button>
+          </div>
+        ) : sync.subscriptionStatus === "past_due" ? (
+          <div className="account__billing">
+            <span className="account__error">
+              Payment failed — sync is paused. Update your card to resume.
+            </span>
+            <button
+              className="account__btn account__btn--primary"
+              onClick={() => void manageSubscription()}
+              disabled={billingBusy}
+            >
+              Update payment
+            </button>
+          </div>
+        ) : (
+          <div className="account__billing">
+            <span className="setting__hint">
+              Start your 14-day free trial to sync across devices. Cancel anytime.
+            </span>
+            <div className="account__row">
+              <button
+                className="account__btn account__btn--primary"
+                onClick={() => void startTrial("monthly")}
+                disabled={billingBusy}
+              >
+                Monthly
+              </button>
+              <button className="account__btn" onClick={() => void startTrial("annual")} disabled={billingBusy}>
+                Annual
+              </button>
+            </div>
+          </div>
+        ))}
+
       <div className="account__row">
         <button
           className="account__btn"

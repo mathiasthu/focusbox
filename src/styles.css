@@ -461,6 +461,14 @@ body::after {
   border-radius: 9px;
   padding: 10px 12px;
 }
+.account__billing {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 0 2px;
+  border-top: 1px dashed var(--line);
+}
 
 /* ---------- Timer dial ---------- */
 .timer {

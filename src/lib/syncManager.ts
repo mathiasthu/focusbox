@@ -5,11 +5,21 @@ import {
   adkToBase64,
   adkFromBase64,
 } from "./crypto";
-import { ApiError, UnauthorizedError, type AuthApi, type SyncApi } from "./api";
+import {
+  ApiError,
+  PaymentRequiredError,
+  UnauthorizedError,
+  type AuthApi,
+  type BillingApi,
+  type Plan,
+  type SyncApi,
+} from "./api";
 import { emptySyncState, syncOnce, type LocalData, type SyncState } from "./sync";
 import type { SyncPersist } from "./syncStore";
 
-export type SyncStatus = "signed-out" | "idle" | "syncing" | "error" | "needs-relogin";
+// "paused" = subscription inactive; writes are gated, the local app keeps working.
+export type SyncStatus = "signed-out" | "idle" | "syncing" | "error" | "needs-relogin" | "paused";
+export type { Plan };
 
 /** What the app exposes to the manager (current local state, no sync timestamps). */
 export interface LocalSnapshot {
@@ -33,10 +43,15 @@ export interface SyncSnapshot {
   recoveryKey: string | null;
   /** true once a notes conflict-copy was saved this session (surfaced as a hint). */
   hadNotesConflict: boolean;
+  // --- subscription (from GET /account/me) ---
+  billingEnabled: boolean; // false → free/open, no billing UI
+  syncEnabled: boolean; // may this account write to sync right now?
+  subscriptionStatus: string; // none|trialing|active|past_due|canceled|...
+  currentPeriodEnd: number | null; // epoch ms
 }
 
 export interface SyncManagerDeps {
-  api: SyncApi & AuthApi;
+  api: SyncApi & AuthApi & BillingApi;
   now: () => number;
   persist: {
     load: () => Promise<SyncPersist | null>;
@@ -76,6 +91,11 @@ export class SyncManager {
   private recoveryKey: string | null = null;
   private hadNotesConflict = false;
 
+  private billingEnabled = false;
+  private syncEnabled = true; // assume open until /account/me says otherwise
+  private subscriptionStatus = "none";
+  private currentPeriodEnd: number | null = null;
+
   private running = false;
   private queued = false;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -92,6 +112,10 @@ export class SyncManager {
       lastError: this.lastError,
       recoveryKey: this.recoveryKey,
       hadNotesConflict: this.hadNotesConflict,
+      billingEnabled: this.billingEnabled,
+      syncEnabled: this.syncEnabled,
+      subscriptionStatus: this.subscriptionStatus,
+      currentPeriodEnd: this.currentPeriodEnd,
     };
   }
 
@@ -113,6 +137,7 @@ export class SyncManager {
     this.notesUpdatedAt = p.notesUpdatedAt ?? 0;
     this.status = "idle";
     this.emit();
+    await this.refreshAccount();
     await this.syncNow();
   }
 
@@ -130,7 +155,8 @@ export class SyncManager {
       });
       this.recoveryKey = created.recoveryKey; // shown once
       await this.persistBestEffort(); // resume-only; a persistent failure resurfaces in syncNow
-      await this.syncNow(); // push local data up
+      await this.refreshAccount(); // learn billing/sync_enabled before attempting a push
+      await this.syncNow(); // push local data up (skipped if a subscription is required)
     } catch (e) {
       this.status = "error";
       this.lastError = messageFor(e, "Couldn't create the account.");
@@ -156,6 +182,7 @@ export class SyncManager {
         settingsUpdatedAt: 0,
       });
       await this.persistBestEffort(); // resume-only; a persistent failure resurfaces in syncNow
+      await this.refreshAccount();
       await this.syncNow();
     } catch (e) {
       this.status = "error";
@@ -181,6 +208,10 @@ export class SyncManager {
     this.lastError = null;
     this.recoveryKey = null;
     this.hadNotesConflict = false;
+    this.billingEnabled = false;
+    this.syncEnabled = true;
+    this.subscriptionStatus = "none";
+    this.currentPeriodEnd = null;
     await this.d.persist.clear();
     this.emit();
   }
@@ -214,6 +245,13 @@ export class SyncManager {
 
   async syncNow(): Promise<void> {
     if (this.status === "signed-out" || !this.adk) return;
+    // Subscription inactive: writes are gated server-side, so don't hammer it — just
+    // reflect the paused state. A focus/refreshAccount that flips syncEnabled re-enables.
+    if (this.billingEnabled && !this.syncEnabled) {
+      this.status = "paused";
+      this.emit();
+      return;
+    }
     if (this.running) {
       this.queued = true;
       return;
@@ -230,12 +268,56 @@ export class SyncManager {
       this.status = "idle";
       this.lastSyncedAt = this.d.now();
     } catch (e) {
-      this.status = e instanceof UnauthorizedError ? "needs-relogin" : "error";
-      this.lastError = messageFor(e, "Sync failed.");
+      if (e instanceof PaymentRequiredError) {
+        // subscription lapsed mid-session: pause and re-confirm from /account/me
+        this.syncEnabled = false;
+        this.status = "paused";
+        void this.refreshAccount();
+      } else if (e instanceof UnauthorizedError) {
+        this.status = "needs-relogin";
+        this.lastError = messageFor(e, "Sync failed.");
+      } else {
+        this.status = "error";
+        this.lastError = messageFor(e, "Sync failed.");
+      }
     } finally {
       this.running = false;
       this.emit();
     }
+  }
+
+  /** Fetch subscription status from the server (non-fatal on failure). */
+  async refreshAccount(): Promise<void> {
+    if (!this.email) return;
+    try {
+      const acct = await this.authedCall((token) => this.d.api.getAccount(token));
+      this.billingEnabled = acct.billing_enabled;
+      this.syncEnabled = acct.sync_enabled;
+      this.subscriptionStatus = acct.subscription_status;
+      this.currentPeriodEnd = acct.current_period_end
+        ? Date.parse(acct.current_period_end)
+        : null;
+      this.emit();
+    } catch (e) {
+      if (e instanceof UnauthorizedError) {
+        this.status = "needs-relogin";
+        this.emit();
+      } else {
+        console.error("Focusbox: couldn't refresh subscription status.", e);
+      }
+    }
+  }
+
+  /** Create a Stripe Checkout session; returns the URL for the UI to open. */
+  async startCheckout(plan: Plan): Promise<string> {
+    const { url } = await this.authedCall((token) => this.d.api.createCheckout(token, plan));
+    return url;
+  }
+
+  /** Create a Stripe Customer Portal session; returns the URL for the UI to open. */
+  async openPortal(): Promise<string> {
+    const { url } = await this.authedCall((token) => this.d.api.createPortal(token));
+    return url;
   }
 
   // ---- internals ----
@@ -249,38 +331,36 @@ export class SyncManager {
     };
   }
 
+  /** Run an authenticated call, refreshing the access token once on a 401 and retrying.
+   * A second 401 (or a failed refresh) bubbles up as UnauthorizedError -> needs-relogin. */
+  private async authedCall<T>(fn: (token: string) => Promise<T>): Promise<T> {
+    try {
+      return await fn(this.accessToken);
+    } catch (e) {
+      if (e instanceof UnauthorizedError && this.refreshToken) {
+        const { access_token } = await this.d.api.refresh(this.refreshToken);
+        this.accessToken = access_token;
+        await this.persistBestEffort(); // new token is in-memory; resume-only on disk
+        return await fn(access_token);
+      }
+      throw e;
+    }
+  }
+
   private async runCycle(): Promise<void> {
     if (!this.adk) return;
     const adk = this.adk;
-    try {
-      const res = await syncOnce({
+    const res = await this.authedCall((token) =>
+      syncOnce({
         api: this.d.api,
-        token: this.accessToken,
+        token,
         adk,
         local: this.buildLocalData(),
         state: this.state,
         deviceId: this.deviceId,
-      });
-      await this.applyResult(res);
-    } catch (e) {
-      if (e instanceof UnauthorizedError && this.refreshToken) {
-        // one refresh + retry; a second 401 bubbles up -> needs-relogin
-        const { access_token } = await this.d.api.refresh(this.refreshToken);
-        this.accessToken = access_token;
-        await this.persistBestEffort(); // new token is in-memory for this cycle; resume-only on disk
-        const res = await syncOnce({
-          api: this.d.api,
-          token: access_token,
-          adk,
-          local: this.buildLocalData(),
-          state: this.state,
-          deviceId: this.deviceId,
-        });
-        await this.applyResult(res);
-        return;
-      }
-      throw e;
-    }
+      }),
+    );
+    await this.applyResult(res);
   }
 
   private async applyResult(res: {

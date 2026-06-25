@@ -73,6 +73,30 @@ export class ConflictError extends ApiError {
   }
 }
 
+/** Thrown when a write is rejected because the subscription is inactive (402). */
+export class PaymentRequiredError extends ApiError {
+  constructor(message = "sync_inactive") {
+    super(402, message);
+    this.name = "PaymentRequiredError";
+  }
+}
+
+export interface AccountInfo {
+  email: string;
+  billing_enabled: boolean;
+  sync_enabled: boolean;
+  subscription_status: string;
+  current_period_end: string | null;
+}
+
+export type Plan = "monthly" | "annual";
+
+export interface BillingApi {
+  getAccount(token: string): Promise<AccountInfo>;
+  createCheckout(token: string, plan: Plan): Promise<{ url: string }>;
+  createPortal(token: string): Promise<{ url: string }>;
+}
+
 /** The blob-sync surface the orchestrator depends on (injectable for tests). */
 export interface SyncApi {
   getManifest(token: string): Promise<ManifestEntry[]>;
@@ -106,6 +130,7 @@ async function request(
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
   });
   if (resp.status === 401 || resp.status === 403) throw new UnauthorizedError();
+  if (resp.status === 402) throw new PaymentRequiredError();
   if (resp.status === 409) {
     let current = 0;
     try {
@@ -123,7 +148,7 @@ async function request(
 export function createHttpApi(
   baseUrl: string = SYNC_API_URL,
   fetchImpl: FetchImpl = fetch,
-): SyncApi & AuthApi {
+): SyncApi & AuthApi & BillingApi {
   return {
     async signup(email, body) {
       const r = await request(baseUrl, "/v1/auth/signup", fetchImpl, {
@@ -163,6 +188,22 @@ export function createHttpApi(
         method: "DELETE",
         token,
       });
+    },
+    async getAccount(token) {
+      const r = await request(baseUrl, "/v1/account/me", fetchImpl, { token });
+      return r.json();
+    },
+    async createCheckout(token, plan) {
+      const r = await request(baseUrl, "/v1/billing/checkout", fetchImpl, {
+        method: "POST",
+        token,
+        body: { plan },
+      });
+      return r.json();
+    },
+    async createPortal(token) {
+      const r = await request(baseUrl, "/v1/billing/portal", fetchImpl, { method: "POST", token });
+      return r.json();
     },
   };
 }
