@@ -17,6 +17,8 @@
         { "url": "https://api.focusbox.net/*" },
         { "url": "http://localhost:8000/*" }
       ]
-    }
+    },
+    "updater:default",
+    "process:default"
   ]
 }

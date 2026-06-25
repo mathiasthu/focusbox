@@ -1,11 +1,16 @@
 name: Build apps
 
-# Builds the installers in the cloud (no local toolchain needed).
+# Builds the installers in the cloud (no local toolchain needed) and signs the
+# auto-update artifacts.
 #
-# - "Run workflow" button (Actions tab) → builds and uploads each installer as a
-#   downloadable artifact on the run page.
-# - Pushing a version tag like v0.1.0 → also publishes a public GitHub Release
-#   with the Windows (.exe) and macOS (.dmg) installers attached.
+# - "Run workflow" button (Actions tab) → builds both installers and uploads each as a
+#   downloadable artifact on the run page (no Release created).
+# - Pushing a version tag like v0.2.2 → publishes a public GitHub Release with the
+#   Windows (.exe) + macOS (.dmg) installers AND the signed updater artifacts +
+#   `latest.json` that the in-app auto-updater reads.
+#
+# Requires repo secret TAURI_SIGNING_PRIVATE_KEY (the updater private key). The key has
+# no password, so TAURI_SIGNING_PRIVATE_KEY_PASSWORD is an empty string below.
 
 on:
   workflow_dispatch:
@@ -21,11 +26,13 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            bundles: nsis
+            args: "--bundles nsis"
             artifact_glob: src-tauri/target/release/bundle/nsis/*-setup.exe
             artifact_name: focusbox-windows-installer
           - os: macos-latest
-            bundles: dmg
+            # `app` is required so createUpdaterArtifacts emits the macOS .app.tar.gz
+            # updater bundle; `dmg` is the human download.
+            args: "--bundles app,dmg"
             artifact_glob: src-tauri/target/release/bundle/dmg/*.dmg
             artifact_name: focusbox-macos-dmg
     runs-on: ${{ matrix.os }}
@@ -49,22 +56,17 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build Tauri app
-        run: npm run tauri build -- --bundles ${{ matrix.bundles }}
-
-      - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+      - name: Build (+ publish Release on tag) with signed updater artifacts
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_glob }}
-          if-no-files-found: error
-
-      - name: Publish release (on tag)
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2 (2.x)
-        with:
-          files: ${{ matrix.artifact_glob }}
-          body: |
+          # Only release on a tag push; a manual run just builds (tagName empty → no release).
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: "Focusbox ${{ github.ref_name }}"
+          releaseBody: |
             Focusbox — minimal countdown timer + tasks + notes.
 
             **Windows 11:** download the `*-setup.exe` and run it. SmartScreen may
@@ -74,3 +76,17 @@ jobs:
             **macOS (Apple Silicon):** download the `.dmg`, drag Focusbox to
             Applications. The app is unsigned, so the first launch needs a
             right-click → **Open** (or run `xattr -cr /Applications/Focusbox.app`).
+
+            Once installed, Focusbox keeps itself up to date — it checks on launch and
+            offers a one-click "restart to update".
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+          args: ${{ matrix.args }}
+
+      - name: Upload installer artifact (for manual runs)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_glob }}
+          if-no-files-found: error
