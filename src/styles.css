@@ -513,6 +513,10 @@ body::after {
   font-size: 13px;
   color: var(--ink-soft);
 }
+.account__conflicts-new {
+  color: var(--accent);
+  font-weight: 700;
+}
 .account__btn--danger {
   align-self: flex-start;
   color: #b3261e;

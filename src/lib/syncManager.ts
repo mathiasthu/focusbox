@@ -19,6 +19,7 @@ import {
 } from "./conflicts";
 import {
   ApiError,
+  ConflictError,
   PaymentRequiredError,
   UnauthorizedError,
   type AuthApi,
@@ -27,6 +28,7 @@ import {
   type SyncApi,
 } from "./api";
 import { emptySyncState, syncOnce, type LocalData, type SyncState } from "./sync";
+import { KEY_NOTES, type NotesValue } from "./syncTypes";
 import type { SyncPersist } from "./syncStore";
 
 // "paused" = subscription inactive; writes are gated, the local app keeps working.
@@ -262,6 +264,10 @@ export class SyncManager {
     this.debounceTimer = null;
     this.clearBackoff();
     this.backoffMs = 0;
+    // Clear the in-flight mutex so a cycle that completes after sign-out can't wedge or
+    // mislead a later call (its own completion is guarded by the signed-out checks).
+    this.running = false;
+    this.queued = false;
     if (this.adk) this.adk.fill(0);
     this.adk = null;
     this.email = null;
@@ -335,12 +341,19 @@ export class SyncManager {
         this.queued = false;
         await this.runCycle();
       } while (this.queued);
-      this.status = "idle";
-      this.lastSyncedAt = this.d.now();
-      this.backoffMs = 0;
-      this.clearBackoff();
+      // If the user signed out (or was deleted) while this cycle was in flight, don't
+      // resurrect an "idle"/synced status over the signed-out state. (Cast defeats TS's
+      // literal-narrowing of the mutable status field across the awaited runCycle.)
+      if ((this.status as SyncStatus) !== "signed-out" && this.adk) {
+        this.status = "idle";
+        this.lastSyncedAt = this.d.now();
+        this.backoffMs = 0;
+        this.clearBackoff();
+      }
     } catch (e) {
-      if (e instanceof PaymentRequiredError) {
+      if ((this.status as SyncStatus) === "signed-out" || !this.adk) {
+        // Signed out mid-flight: swallow — never overwrite signed-out or schedule a retry.
+      } else if (e instanceof PaymentRequiredError) {
         // subscription lapsed mid-session: pause and re-confirm from /account/me
         this.syncEnabled = false;
         this.status = "paused";
@@ -370,6 +383,7 @@ export class SyncManager {
   }
 
   private scheduleBackoff(): void {
+    if (this.status === "signed-out" || !this.adk) return;
     this.clearBackoff();
     this.backoffMs =
       this.backoffMs === 0 ? this.backoffBaseMs : Math.min(this.backoffMs * 2, this.backoffCapMs);
@@ -463,10 +477,38 @@ export class SyncManager {
       restoreConflictFn({ api: this.d.api, token: t, adk, deviceId: this.deviceId, key, current, now }),
     );
     this.notesUpdatedAt = notes.updated_at;
+    // Push the restored doc AUTHORITATIVELY — do NOT rely on a follow-up syncNow reading
+    // getLocal(), because onMerged is an async setState in the app that may not have
+    // flushed yet (so getLocal() would still return the OLD note and overwrite the
+    // server with it). pushNotes uses the explicit restored value instead.
+    await this.pushNotes(notes);
     const local = this.d.getLocal();
     this.d.onMerged({ tasks: local.tasks, notesDoc: notes.doc, settings: local.settings });
     await this.persistIdentity();
-    await this.syncNow();
+  }
+
+  /** Push a specific notes value to KEY_NOTES authoritatively (independent of getLocal()).
+   * A concurrent-writer 409 is left for the next normal sync to reconcile via LWW. */
+  private async pushNotes(note: NotesValue): Promise<void> {
+    const adk = this.adk;
+    if (!adk) return;
+    const base = this.state.versions[KEY_NOTES] ?? 0;
+    const { ciphertext, nonce } = encryptBlob(JSON.stringify(note), adk);
+    try {
+      const res = await this.authedCall((t) =>
+        this.d.api.pushBlob(t, {
+          key: KEY_NOTES,
+          ciphertext,
+          nonce,
+          base_version: base,
+          device_id: this.deviceId,
+        }),
+      );
+      this.state.versions[KEY_NOTES] = res.version;
+      this.state.notesBaseUpdatedAt = note.updated_at;
+    } catch (e) {
+      if (!(e instanceof ConflictError)) throw e;
+    }
   }
 
   /** TEST-ONLY: encrypt + push a notes conflict copy with this session's ADK so tests
@@ -475,6 +517,11 @@ export class SyncManager {
     doc: Record<string, unknown> | null;
     updated_at: number;
   }): Promise<string> {
+    // Hard-disabled in production builds — it can't be reached from the app (not on the
+    // useSync controller surface), and this guard keeps it out of the shipped behavior.
+    if ((import.meta as { env?: { PROD?: boolean } }).env?.PROD) {
+      throw new Error("seedConflictForTest is test-only");
+    }
     const adk = this.adk;
     if (!adk) throw new Error("locked");
     const key = `notes_conflict:${this.deviceId}-${value.updated_at}`;

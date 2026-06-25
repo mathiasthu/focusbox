@@ -7,7 +7,7 @@ import {
   notesPlainText,
   restoreConflict,
 } from "./conflicts";
-import type { BlobData, ManifestEntry, PushBody, PushResult, SyncApi } from "./api";
+import { ConflictError, type BlobData, type ManifestEntry, type PushBody, type PushResult, type SyncApi } from "./api";
 import type { NotesValue } from "./syncTypes";
 
 class FakeApi implements SyncApi {
@@ -34,8 +34,12 @@ class FakeApi implements SyncApi {
     return { key, ciphertext: b.ciphertext, nonce: b.nonce, version: b.version, updated_at: "x" };
   }
   async pushBlob(_t: string, body: PushBody): Promise<PushResult> {
+    // Faithful to the server's optimistic concurrency: a base_version that doesn't match
+    // the current version (including base 0 onto an existing key) is a 409.
     const cur = this.blobs.get(body.key);
-    const version = cur ? cur.version + 1 : 1;
+    const base = body.base_version ?? 0;
+    if ((cur ? cur.version : 0) !== base) throw new ConflictError(cur ? cur.version : 0);
+    const version = (cur ? cur.version : 0) + 1;
     this.blobs.set(body.key, { ciphertext: body.ciphertext, nonce: body.nonce, version });
     return { key: body.key, version };
   }

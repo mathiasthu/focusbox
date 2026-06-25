@@ -49,6 +49,7 @@ class FakeBackend implements SyncApi, AuthApi, BillingApi {
   syncAllowed = true;
   subscriptionStatus = "none";
   transientFail = 0; // when > 0, getManifest throws a network error and decrements
+  gate: Promise<void> | null = null; // when set, getManifest blocks on it (simulate in-flight)
 
   private mk(kind: string, email: string): string {
     return `${kind}:${email}:${this.n++}`;
@@ -120,6 +121,7 @@ class FakeBackend implements SyncApi, AuthApi, BillingApi {
     return { access_token: this.mk("access", body.email), refresh_token: this.mk("refresh", body.email), token_type: "bearer" };
   }
   async getManifest(token: string): Promise<ManifestEntry[]> {
+    if (this.gate) await this.gate;
     if (this.transientFail > 0) {
       this.transientFail--;
       throw new TypeError("network down");
@@ -467,6 +469,49 @@ describe("SyncManager", () => {
     expect((await a.mgr.listConflicts()).map((c) => c.key)).not.toContain(ckey);
   });
 
+  it("restore propagates the restored doc to other devices even if getLocal lags (async setState)", async () => {
+    const api = new FakeBackend();
+    // Device A wired like React: getLocal() returns `committed`, which onMerged does NOT
+    // update synchronously (mimics setState not flushing before the continuation). The OLD
+    // code's syncNow would read the stale `committed` note and overwrite the restore.
+    const committed: LocalSnapshot = {
+      tasks: [],
+      notesDoc: { v: "current" },
+      settings: { theme: "system", accent: "clay", spotifyEnabled: true },
+    };
+    let applied: MergedSnapshot | null = null;
+    const persist = { value: null as SyncPersist | null };
+    const mgrA = new SyncManager({
+      api,
+      now,
+      debounceMs: 0,
+      persist: {
+        load: async () => persist.value,
+        save: async (p) => {
+          persist.value = p;
+        },
+        clear: async () => {
+          persist.value = null;
+        },
+        newDeviceId: () => "dev-async",
+      },
+      getLocal: () => committed, // never reflects the restore
+      onMerged: (m) => {
+        applied = m;
+      },
+      onChange: () => {},
+    });
+    await mgrA.signup("async@e.com", "pw");
+    const ckey = await mgrA.seedConflictForTest({ doc: { v: "older" }, updated_at: 100 });
+    await mgrA.restoreConflict(ckey);
+    expect((applied as MergedSnapshot | null)?.notesDoc).toEqual({ v: "older" }); // applied into the app
+
+    // Device B logs in fresh: the SERVER must hold the restored doc, not the stale "current".
+    const b = makeDevice(api, "B");
+    await b.mgr.login("async@e.com", "pw");
+    expect(b.local.notesDoc).toEqual({ v: "older" });
+  });
+
   it("deletes the account, signs out, and leaves local data intact", async () => {
     const api = new FakeBackend();
     const a = makeDevice(api, "A", { tasks: [task("keep")], notesDoc: { v: "mine" } });
@@ -565,5 +610,40 @@ describe("SyncManager", () => {
     await a.mgr.logout();
     expect(fk.pending()).toBe(0);
     expect(a.mgr.snapshot().status).toBe("signed-out");
+  });
+
+  it("logout during an in-flight (then succeeding) sync stays signed-out", async () => {
+    const api = new FakeBackend();
+    const fk = makeFakeScheduler();
+    const a = makeDevice(api, "A", { tasks: [task("t1")] }, fk.scheduler);
+    await a.mgr.signup("race1@e.com", "pw");
+    let release!: () => void;
+    api.gate = new Promise<void>((r) => (release = r));
+    const p = a.mgr.syncNow(); // blocks inside getManifest
+    await flush();
+    await a.mgr.logout(); // sign out while the cycle is awaiting
+    api.gate = null;
+    release();
+    await p;
+    expect(a.mgr.snapshot().status).toBe("signed-out"); // not "idle"
+    expect(fk.pending()).toBe(0);
+  });
+
+  it("logout during an in-flight (then failing) sync leaves no error status or orphaned backoff", async () => {
+    const api = new FakeBackend();
+    const fk = makeFakeScheduler();
+    const a = makeDevice(api, "A", { tasks: [task("t1")] }, fk.scheduler);
+    await a.mgr.signup("race2@e.com", "pw");
+    let release!: () => void;
+    api.gate = new Promise<void>((r) => (release = r));
+    api.transientFail = 1; // it will throw a transient error once the gate releases
+    const p = a.mgr.syncNow();
+    await flush();
+    await a.mgr.logout();
+    api.gate = null;
+    release();
+    await p;
+    expect(a.mgr.snapshot().status).toBe("signed-out"); // not "error"
+    expect(fk.pending()).toBe(0); // no orphaned backoff timer
   });
 });

@@ -4,6 +4,12 @@ import { notesConflictKey, type NotesValue } from "./syncTypes";
 
 const CONFLICT_PREFIX = "notes_conflict:";
 
+/** Short random suffix to guarantee a unique backup-copy key (collision-free). */
+function randomSuffix(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID().slice(0, 8);
+  return Math.random().toString(36).slice(2, 10);
+}
+
 export interface ConflictMeta {
   key: string;
   updatedAt: number;
@@ -82,14 +88,17 @@ export async function restoreConflict(opts: {
   const hasContent = current.doc !== null;
   const differs = JSON.stringify(current.doc) !== JSON.stringify(restored.doc);
   if (hasContent && differs) {
-    const backupKey = notesConflictKey(`${deviceId}-${now}`);
+    // Unique suffix so the backup can NEVER collide with an existing conflict blob — a
+    // base_version:0 push onto an occupied key would 409 and (if we ignored it) silently
+    // drop the unsynced current note. With a fresh key a 409 is unreachable; any genuine
+    // failure (network) propagates and aborts BEFORE we delete the restored copy, so the
+    // current note is never lost.
+    const backupKey = notesConflictKey(`${deviceId}-${now}-${randomSuffix()}`);
     const { ciphertext, nonce } = encryptBlob(JSON.stringify(current), adk);
     try {
       await api.pushBlob(token, { key: backupKey, ciphertext, nonce, base_version: 0, device_id: deviceId });
     } catch (e) {
-      // A colliding backup key is harmless; any other failure must abort so the old
-      // note is never dropped before it's safely stored.
-      if (!(e instanceof ConflictError)) throw e;
+      if (!(e instanceof ConflictError)) throw e; // defensive: a fresh key shouldn't 409
     }
   }
 

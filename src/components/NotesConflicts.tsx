@@ -61,7 +61,9 @@ export default function NotesConflicts({ sync }: { sync: SyncController }) {
   return (
     <div className="account__conflicts">
       <button className="account__link" onClick={() => setExpanded((v) => !v)}>
-        Notes backups ({items.length}) {expanded ? "▾" : "▸"}
+        Notes backups ({items.length})
+        {sync.hadNotesConflict && <span className="account__conflicts-new" title="A new backup was saved this session"> •</span>}{" "}
+        {expanded ? "▾" : "▸"}
       </button>
       {expanded && (
         <ul className="account__conflicts-list">
@@ -73,7 +75,7 @@ export default function NotesConflicts({ sync }: { sync: SyncController }) {
                 {confirmKey === it.key ? (
                   <button
                     className="account__btn account__btn--primary"
-                    disabled={busyKey === it.key}
+                    disabled={busyKey !== null}
                     onClick={() => void restore(it.key)}
                   >
                     Replace current note
@@ -81,7 +83,7 @@ export default function NotesConflicts({ sync }: { sync: SyncController }) {
                 ) : (
                   <button
                     className="account__btn"
-                    disabled={busyKey === it.key}
+                    disabled={busyKey !== null}
                     onClick={() => setConfirmKey(it.key)}
                   >
                     Restore
@@ -89,7 +91,7 @@ export default function NotesConflicts({ sync }: { sync: SyncController }) {
                 )}
                 <button
                   className="account__btn"
-                  disabled={busyKey === it.key}
+                  disabled={busyKey !== null}
                   onClick={() => void discard(it.key)}
                 >
                   Discard
