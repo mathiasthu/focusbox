@@ -29,6 +29,7 @@ export interface SyncController extends SyncSnapshot {
   ready: boolean;
   signup: (email: string, password: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
+  recover: (email: string, recoveryKey: string, newPassword: string) => Promise<void>;
   logout: () => Promise<void>;
   syncNow: () => void;
   dismissRecoveryKey: () => void;
@@ -120,6 +121,7 @@ export function useSync(args: {
     ready,
     signup: (e, p) => mgrRef.current?.signup(e, p) ?? Promise.resolve(),
     login: (e, p) => mgrRef.current?.login(e, p) ?? Promise.resolve(),
+    recover: (e, k, p) => mgrRef.current?.recover(e, k, p) ?? Promise.resolve(),
     logout: () => mgrRef.current?.logout() ?? Promise.resolve(),
     syncNow: () => void mgrRef.current?.syncNow(),
     dismissRecoveryKey: () => mgrRef.current?.dismissRecoveryKey(),

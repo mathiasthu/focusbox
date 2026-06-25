@@ -469,6 +469,21 @@ body::after {
   padding: 10px 0 2px;
   border-top: 1px dashed var(--line);
 }
+.account__link {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  color: var(--accent-deep);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.account__link:hover {
+  color: var(--accent);
+}
 
 /* ---------- Timer dial ---------- */
 .timer {

@@ -171,6 +171,11 @@ class FakeBackend implements SyncApi, AuthApi, BillingApi {
     this.auth(token);
     return { url: "https://billing.stripe.com/p/test" };
   }
+  async deleteAccount(token: string): Promise<void> {
+    const email = this.auth(token);
+    this.users.delete(email);
+    this.blobs.delete(email);
+  }
   conflictKeys(email: string): string[] {
     return [...this.bf(email).keys()].filter((k) => k.startsWith("notes_conflict:"));
   }

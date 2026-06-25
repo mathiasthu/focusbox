@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { SyncController } from "../hooks/useSync";
+import RecoverForm from "./RecoverForm";
 
 function relativeTime(ts: number | null): string {
   if (!ts) return "";
@@ -60,6 +61,7 @@ export default function AccountSync({ sync }: Props) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [billingBusy, setBillingBusy] = useState(false);
+  const [recovering, setRecovering] = useState(false);
 
   async function startTrial(plan: "monthly" | "annual") {
     if (billingBusy) return;
@@ -135,6 +137,9 @@ export default function AccountSync({ sync }: Props) {
   }
 
   if (!signedIn) {
+    if (recovering) {
+      return <RecoverForm sync={sync} onBack={() => setRecovering(false)} />;
+    }
     const relogin = sync.status === "needs-relogin";
     return (
       <div className="setting setting--col account">
@@ -184,6 +189,11 @@ export default function AccountSync({ sync }: Props) {
             {busy ? "…" : "Log in"}
           </button>
         </div>
+        {!relogin && (
+          <button className="account__link" onClick={() => setRecovering(true)}>
+            Forgot password?
+          </button>
+        )}
       </div>
     );
   }
