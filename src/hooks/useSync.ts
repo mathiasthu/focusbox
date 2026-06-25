@@ -116,10 +116,13 @@ export function useSync(args: {
       // then sync.
       void m.refreshAccount().then(() => m.syncNow());
     };
+    const onOnline = () => mgrRef.current?.onOnline();
     window.addEventListener("focus", onFocus);
+    window.addEventListener("online", onOnline);
     return () => {
       alive = false;
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener("online", onOnline);
     };
   }, [args.enabled]);
 
