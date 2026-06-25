@@ -7,7 +7,16 @@ import {
   recoverWithKey,
   rewrapForNewPassword,
   recoveryAuthHashFromKey,
+  encryptBlob,
 } from "./crypto";
+import {
+  listConflicts as listConflictsFn,
+  getConflict as getConflictFn,
+  restoreConflict as restoreConflictFn,
+  discardConflict as discardConflictFn,
+  type ConflictMeta,
+  type ConflictContent,
+} from "./conflicts";
 import {
   ApiError,
   PaymentRequiredError,
@@ -23,6 +32,7 @@ import type { SyncPersist } from "./syncStore";
 // "paused" = subscription inactive; writes are gated, the local app keeps working.
 export type SyncStatus = "signed-out" | "idle" | "syncing" | "error" | "needs-relogin" | "paused";
 export type { Plan };
+export type { ConflictMeta, ConflictContent };
 
 /** What the app exposes to the manager (current local state, no sync timestamps). */
 export interface LocalSnapshot {
@@ -357,6 +367,56 @@ export class SyncManager {
   async openPortal(): Promise<string> {
     const { url } = await this.authedCall((token) => this.d.api.createPortal(token));
     return url;
+  }
+
+  // ---- notes conflict copies (P3b) ----
+
+  async listConflicts(): Promise<ConflictMeta[]> {
+    if (!this.email) return [];
+    return this.authedCall((t) => listConflictsFn(this.d.api, t));
+  }
+
+  async getConflict(key: string): Promise<ConflictContent> {
+    const adk = this.adk;
+    if (!adk) throw new Error("locked");
+    return this.authedCall((t) => getConflictFn(this.d.api, t, adk, key));
+  }
+
+  async discardConflict(key: string): Promise<void> {
+    await this.authedCall((t) => discardConflictFn(this.d.api, t, key));
+  }
+
+  /** Restore a conflict copy as the current note (backing up the current note first).
+   * Applies the restored doc into the app and pushes it as the new current note. */
+  async restoreConflict(key: string): Promise<void> {
+    const adk = this.adk;
+    if (!adk) throw new Error("locked");
+    const now = this.d.now();
+    const current = this.buildLocalData().notes;
+    const { notes } = await this.authedCall((t) =>
+      restoreConflictFn({ api: this.d.api, token: t, adk, deviceId: this.deviceId, key, current, now }),
+    );
+    this.notesUpdatedAt = notes.updated_at;
+    const local = this.d.getLocal();
+    this.d.onMerged({ tasks: local.tasks, notesDoc: notes.doc, settings: local.settings });
+    await this.persistIdentity();
+    await this.syncNow();
+  }
+
+  /** TEST-ONLY: encrypt + push a notes conflict copy with this session's ADK so tests
+   * can exercise the restore/discard path against the in-memory backend. */
+  async seedConflictForTest(value: {
+    doc: Record<string, unknown> | null;
+    updated_at: number;
+  }): Promise<string> {
+    const adk = this.adk;
+    if (!adk) throw new Error("locked");
+    const key = `notes_conflict:${this.deviceId}-${value.updated_at}`;
+    const { ciphertext, nonce } = encryptBlob(JSON.stringify(value), adk);
+    await this.authedCall((t) =>
+      this.d.api.pushBlob(t, { key, ciphertext, nonce, base_version: 0, device_id: this.deviceId }),
+    );
+    return key;
   }
 
   // ---- internals ----

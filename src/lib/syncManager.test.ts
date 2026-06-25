@@ -399,4 +399,30 @@ describe("SyncManager", () => {
     await expect(b.mgr.recover("rk@e.com", wrong, "new")).rejects.toThrow();
     expect(b.mgr.snapshot().lastError).toMatch(/recovery key/i);
   });
+
+  it("lists, restores (swap+backup), and discards notes conflict copies", async () => {
+    const api = new FakeBackend();
+    const a = makeDevice(api, "A", { notesDoc: { v: "current" } });
+    await a.mgr.signup("cf@e.com", "pw");
+    const ckey = await a.mgr.seedConflictForTest({ doc: { v: "older" }, updated_at: 100 });
+
+    const list = await a.mgr.listConflicts();
+    expect(list.map((c) => c.key)).toContain(ckey);
+
+    await a.mgr.restoreConflict(ckey);
+    expect(a.local.notesDoc).toEqual({ v: "older" }); // restored into the app
+
+    const after = await a.mgr.listConflicts();
+    expect(after.map((c) => c.key)).not.toContain(ckey); // restored copy removed
+    expect(after).toHaveLength(1); // the previous current note was backed up
+  });
+
+  it("discards a conflict copy", async () => {
+    const api = new FakeBackend();
+    const a = makeDevice(api, "A");
+    await a.mgr.signup("cf2@e.com", "pw");
+    const ckey = await a.mgr.seedConflictForTest({ doc: { v: "x" }, updated_at: 5 });
+    await a.mgr.discardConflict(ckey);
+    expect((await a.mgr.listConflicts()).map((c) => c.key)).not.toContain(ckey);
+  });
 });
