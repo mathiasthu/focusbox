@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { initCrypto } from "./crypto";
+import { createAccount, initCrypto } from "./crypto";
 import {
   ApiError,
   ConflictError,
@@ -31,7 +31,13 @@ import type { SyncedTask } from "./syncTypes";
 class FakeBackend implements SyncApi, AuthApi, BillingApi {
   users = new Map<
     string,
-    { auth_hash: string; wrapped_adk: string; recovery_wrapped_adk: string; kdf_params: unknown }
+    {
+      auth_hash: string;
+      wrapped_adk: string;
+      recovery_wrapped_adk: string;
+      recovery_auth_hash: string;
+      kdf_params: unknown;
+    }
   >();
   blobs = new Map<string, Map<string, { ciphertext: string; nonce: string; version: number }>>();
   private n = 0;
@@ -70,6 +76,7 @@ class FakeBackend implements SyncApi, AuthApi, BillingApi {
       auth_hash: body.auth_hash,
       wrapped_adk: body.wrapped_adk,
       recovery_wrapped_adk: body.recovery_wrapped_adk,
+      recovery_auth_hash: body.recovery_auth_hash,
       kdf_params: body.kdf_params,
     });
     return { access_token: this.mk("access", email), refresh_token: this.mk("refresh", email), token_type: "bearer" };
@@ -91,6 +98,25 @@ class FakeBackend implements SyncApi, AuthApi, BillingApi {
     const [kind, email] = refreshToken.split(":");
     if (kind !== "refresh" || !this.users.has(email)) throw new UnauthorizedError();
     return { access_token: this.mk("access", email) };
+  }
+  async recoverStart(email: string, recoveryAuthHash: string) {
+    const u = this.users.get(email);
+    if (!u || u.recovery_auth_hash !== recoveryAuthHash) throw new UnauthorizedError();
+    return { recovery_wrapped_adk: u.recovery_wrapped_adk, kdf_params: u.kdf_params as LoginResult["kdf_params"] };
+  }
+  async recoverComplete(body: {
+    email: string;
+    recovery_auth_hash: string;
+    new_auth_hash: string;
+    new_wrapped_adk: string;
+    kdf_params: unknown;
+  }): Promise<Tokens> {
+    const u = this.users.get(body.email);
+    if (!u || u.recovery_auth_hash !== body.recovery_auth_hash) throw new UnauthorizedError();
+    u.auth_hash = body.new_auth_hash;
+    u.wrapped_adk = body.new_wrapped_adk;
+    u.kdf_params = body.kdf_params;
+    return { access_token: this.mk("access", body.email), refresh_token: this.mk("refresh", body.email), token_type: "bearer" };
   }
   async getManifest(token: string): Promise<ManifestEntry[]> {
     const email = this.auth(token);
@@ -338,5 +364,34 @@ describe("SyncManager", () => {
     const b = makeDevice(api, "B");
     await expect(b.mgr.login("wp@e.com", "wrong")).rejects.toThrow();
     expect(b.mgr.snapshot().lastError).toMatch(/incorrect/i);
+  });
+
+  it("recovers the password with the recovery key and unlocks existing data", async () => {
+    const api = new FakeBackend();
+    const a = makeDevice(api, "A", { tasks: [task("t1")], notesDoc: { v: "secret" } });
+    await a.mgr.signup("rec@e.com", "old");
+    const recoveryKey = a.mgr.snapshot().recoveryKey!;
+
+    const b = makeDevice(api, "B");
+    await b.mgr.recover("rec@e.com", recoveryKey, "newpass");
+    expect(b.mgr.snapshot().status).toBe("idle");
+    expect(b.local.tasks.map((t) => t.id)).toEqual(["t1"]);
+    expect(b.local.notesDoc).toEqual({ v: "secret" });
+
+    const c = makeDevice(api, "C");
+    await expect(c.mgr.login("rec@e.com", "old")).rejects.toThrow(); // old password dead
+    const d = makeDevice(api, "D");
+    await d.mgr.login("rec@e.com", "newpass"); // new password works
+    expect(d.mgr.snapshot().status).toBe("idle");
+  });
+
+  it("rejects recovery with a wrong recovery key (friendly error)", async () => {
+    const api = new FakeBackend();
+    const a = makeDevice(api, "A");
+    await a.mgr.signup("rk@e.com", "pw");
+    const wrong = (await createAccount("other@e.com", "pw")).recoveryKey;
+    const b = makeDevice(api, "B");
+    await expect(b.mgr.recover("rk@e.com", wrong, "new")).rejects.toThrow();
+    expect(b.mgr.snapshot().lastError).toMatch(/recovery key/i);
   });
 });

@@ -4,6 +4,9 @@ import {
   completeLogin,
   adkToBase64,
   adkFromBase64,
+  recoverWithKey,
+  rewrapForNewPassword,
+  recoveryAuthHashFromKey,
 } from "./crypto";
 import {
   ApiError,
@@ -187,6 +190,42 @@ export class SyncManager {
     } catch (e) {
       this.status = "error";
       this.lastError = messageFor(e, "Couldn't log in.");
+      this.emit();
+      throw e;
+    }
+  }
+
+  async recover(emailRaw: string, recoveryKey: string, newPassword: string): Promise<void> {
+    const email = emailRaw.trim().toLowerCase();
+    this.status = "syncing";
+    this.lastError = null;
+    this.emit();
+    try {
+      const rah = recoveryAuthHashFromKey(recoveryKey);
+      const start = await this.d.api.recoverStart(email, rah);
+      const adk = await recoverWithKey(recoveryKey, start.recovery_wrapped_adk);
+      const rewrapped = await rewrapForNewPassword(email, newPassword, adk);
+      const tokens = await this.d.api.recoverComplete({
+        email,
+        recovery_auth_hash: rah,
+        new_auth_hash: rewrapped.auth_hash,
+        new_wrapped_adk: rewrapped.wrapped_adk,
+        kdf_params: rewrapped.kdf_params,
+      });
+      const local = this.d.getLocal();
+      this.setIdentity(email, tokens.access_token, tokens.refresh_token, adk, {
+        notesUpdatedAt: local.notesDoc ? this.d.now() : 0,
+        settingsUpdatedAt: 0,
+      });
+      await this.persistBestEffort();
+      await this.refreshAccount();
+      await this.syncNow();
+    } catch (e) {
+      this.status = "error";
+      this.lastError =
+        e instanceof UnauthorizedError
+          ? "Recovery key or email is incorrect."
+          : messageFor(e, "Couldn't reset your password.");
       this.emit();
       throw e;
     }
