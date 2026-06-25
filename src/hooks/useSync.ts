@@ -6,6 +6,8 @@ import { isTauri } from "../lib/store";
 import { clearSync, loadSync, newDeviceId, saveSync } from "../lib/syncStore";
 import {
   SyncManager,
+  type ConflictContent,
+  type ConflictMeta,
   type LocalSnapshot,
   type MergedSnapshot,
   type Plan,
@@ -38,6 +40,10 @@ export interface SyncController extends SyncSnapshot {
   notifySettingsChanged: (at: number) => void;
   startCheckout: (plan: Plan) => Promise<string>;
   openPortal: () => Promise<string>;
+  listConflicts: () => Promise<ConflictMeta[]>;
+  getConflict: (key: string) => Promise<ConflictContent>;
+  restoreConflict: (key: string) => Promise<void>;
+  discardConflict: (key: string) => Promise<void>;
 }
 
 const SIGNED_OUT: SyncSnapshot = {
@@ -132,5 +138,10 @@ export function useSync(args: {
       mgrRef.current?.startCheckout(plan) ?? Promise.reject(new Error("sync not ready")),
     openPortal: () =>
       mgrRef.current?.openPortal() ?? Promise.reject(new Error("sync not ready")),
+    listConflicts: () => mgrRef.current?.listConflicts() ?? Promise.resolve([]),
+    getConflict: (key) =>
+      mgrRef.current?.getConflict(key) ?? Promise.reject(new Error("sync not ready")),
+    restoreConflict: (key) => mgrRef.current?.restoreConflict(key) ?? Promise.resolve(),
+    discardConflict: (key) => mgrRef.current?.discardConflict(key) ?? Promise.resolve(),
   };
 }

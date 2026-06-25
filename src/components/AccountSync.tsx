@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { SyncController } from "../hooks/useSync";
 import RecoverForm from "./RecoverForm";
+import NotesConflicts from "./NotesConflicts";
 
 function relativeTime(ts: number | null): string {
   if (!ts) return "";
@@ -218,11 +219,7 @@ export default function AccountSync({ sync }: Props) {
       <span className={`account__status${statusBad ? " account__status--error" : ""}`}>
         {statusText}
       </span>
-      {sync.hadNotesConflict && (
-        <span className="setting__hint">
-          A conflicting notes edit was saved as a backup copy on the server.
-        </span>
-      )}
+      <NotesConflicts sync={sync} />
 
       {sync.billingEnabled &&
         (sync.syncEnabled ? (

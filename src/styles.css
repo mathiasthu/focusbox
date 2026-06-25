@@ -484,6 +484,35 @@ body::after {
 .account__link:hover {
   color: var(--accent);
 }
+.account__conflicts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.account__conflicts-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.account__conflict {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.account__conflict-meta {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+.account__conflict-preview {
+  font-size: 13px;
+  color: var(--ink-soft);
+}
 
 /* ---------- Timer dial ---------- */
 .timer {
