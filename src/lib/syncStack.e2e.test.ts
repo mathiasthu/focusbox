@@ -93,7 +93,7 @@ describe.skipIf(!enabled)("e2e: createHttpApi + SyncManager <-> server", () => {
     const raw = JSON.stringify(await r.json());
     expect(raw).not.toContain("from A");
     expect(raw).not.toContain("from B");
-  });
+  }, 60_000); // many sequential round-trips + Argon2; generous timeout for a remote server
 
   it("recovers a forgotten password with the recovery key, then deletes the account", async () => {
     const email = `recover_${Date.now()}@example.com`;
@@ -122,5 +122,5 @@ describe.skipIf(!enabled)("e2e: createHttpApi + SyncManager <-> server", () => {
     expect(b.mgr.snapshot().status).toBe("signed-out");
     const e = makeDevice("E");
     await expect(e.mgr.login(email, "new-password")).rejects.toThrow();
-  });
+  }, 60_000); // many sequential round-trips + Argon2; generous timeout for a remote server
 });
