@@ -4,6 +4,8 @@ import TaskList from "./components/TaskList";
 import Notes from "./components/Notes";
 import Settings from "./components/Settings";
 import SpotifyPlayer from "./components/SpotifyPlayer";
+import UpdateBanner from "./components/UpdateBanner";
+import { checkForUpdate, installUpdateAndRestart, type UpdateInfo } from "./lib/updater";
 import { loadState, saveState, type NotesDoc } from "./lib/store";
 import type { SyncedTask } from "./lib/syncTypes";
 import { reconcileTasks, visibleTasks, type VisibleTask } from "./lib/taskMap";
@@ -30,6 +32,10 @@ export default function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(getStoredMode);
   const [accent, setAccent] = useState<AccentId>(getStoredAccent);
   const [playerVisible, setPlayerVisible] = useState<boolean>(getPlayerVisible);
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateError, setUpdateError] = useState(false);
+  const [updateDismissed, setUpdateDismissed] = useState(false);
 
   // Cloud sync (optional). getLocal reads current state; onMerged applies a merged
   // result back. The hook keeps both in refs, so passing fresh closures each render
@@ -71,6 +77,13 @@ export default function App() {
     return () => {
       active = false;
     };
+  }, []);
+
+  // Check for an app update once on launch (desktop only; no-ops in the browser).
+  useEffect(() => {
+    checkForUpdate().then((info) => {
+      if (info) setUpdate(info);
+    });
   }, []);
 
   // Apply + persist the theme whenever it changes, and follow the OS when on
@@ -126,6 +139,20 @@ export default function App() {
     sync.notifySettingsChanged(Date.now());
   }
 
+  // Download + install the update, then relaunch. On Windows the installer closes the
+  // app to apply, so only run this once the user has chosen to restart.
+  async function restartToUpdate() {
+    setUpdateBusy(true);
+    setUpdateError(false);
+    try {
+      await installUpdateAndRestart();
+    } catch (e) {
+      console.error("Focusbox: update install failed.", e);
+      setUpdateBusy(false);
+      setUpdateError(true);
+    }
+  }
+
   if (!loaded) {
     return <div className="loading">Loading…</div>;
   }
@@ -164,6 +191,16 @@ export default function App() {
         onPlayerVisibleChange={changePlayerVisible}
         sync={sync}
       />
+
+      {update && !updateDismissed && (
+        <UpdateBanner
+          version={update.version}
+          busy={updateBusy}
+          error={updateError}
+          onRestart={restartToUpdate}
+          onDismiss={() => setUpdateDismissed(true)}
+        />
+      )}
     </div>
   );
 }
