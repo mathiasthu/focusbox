@@ -94,4 +94,33 @@ describe.skipIf(!enabled)("e2e: createHttpApi + SyncManager <-> server", () => {
     expect(raw).not.toContain("from A");
     expect(raw).not.toContain("from B");
   });
+
+  it("recovers a forgotten password with the recovery key, then deletes the account", async () => {
+    const email = `recover_${Date.now()}@example.com`;
+
+    // Device A: sign up with some data.
+    const a = makeDevice("A", { tasks: [task("x", { text: "remember me" })] });
+    await a.mgr.signup(email, "old-password");
+    const recoveryKey = a.mgr.snapshot().recoveryKey!;
+    expect(recoveryKey).toBeTypeOf("string");
+
+    // Device B: forgot the password -> recover with the key, data decrypts.
+    const b = makeDevice("B");
+    await b.mgr.recover(email, recoveryKey, "new-password");
+    expect(b.mgr.snapshot().status).toBe("idle");
+    expect(b.state.tasks.map((t) => t.id)).toContain("x");
+
+    // Old password is dead; the new one works.
+    const c = makeDevice("C");
+    await expect(c.mgr.login(email, "old-password")).rejects.toThrow();
+    const d = makeDevice("D");
+    await d.mgr.login(email, "new-password");
+    expect(d.mgr.snapshot().status).toBe("idle");
+
+    // Delete the account; afterwards a fresh login fails (the account is gone).
+    await b.mgr.deleteAccount();
+    expect(b.mgr.snapshot().status).toBe("signed-out");
+    const e = makeDevice("E");
+    await expect(e.mgr.login(email, "new-password")).rejects.toThrow();
+  });
 });
