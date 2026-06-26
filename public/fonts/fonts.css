@@ -8,7 +8,7 @@
 }
 @font-face {
   font-family: "Fraunces";
-  src: url("/fonts/fraunces-latin.woff2") format("woff2");
+  src: url("/fonts/fraunces-italic-latin.woff2") format("woff2");
   font-weight: 300 500;
   font-style: italic;
   font-display: swap;

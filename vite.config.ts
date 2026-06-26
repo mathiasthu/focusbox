@@ -5,8 +5,6 @@ import { sri } from "./scripts/sri-plugin";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
-// @ts-expect-error process is a nodejs global
-const isTauri = !!process.env.TAURI_ENV_PLATFORM || !!host;
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
@@ -14,6 +12,9 @@ export default defineConfig(async () => ({
     react(),
     VitePWA({
       registerType: "autoUpdate",
+      // Don't auto-inject /registerSW.js into index.html; we register manually,
+      // web-only (skipped under Tauri) — see src/main.tsx.
+      injectRegister: null,
       // SHELL ONLY. Never precache the API. Only hashed app assets + the fonts.
       workbox: {
         globPatterns: ["**/*.{js,css,html,woff2,svg,png,ico}"],
