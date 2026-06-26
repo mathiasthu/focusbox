@@ -48,7 +48,9 @@ async function openExternal(url: string) {
     const { openUrl } = await import("@tauri-apps/plugin-opener");
     await openUrl(url);
   } else {
-    window.open(url, "_blank", "noopener");
+    // Web: same-tab redirect. Stripe success/cancel/return URLs point back to app.focusbox.net,
+    // and useSync's window `focus` handler refreshes account + syncs on return.
+    window.location.assign(url);
   }
 }
 

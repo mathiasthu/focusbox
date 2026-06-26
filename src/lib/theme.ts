@@ -1,13 +1,17 @@
+import { isDemo } from "./demo";
+
 export type ThemeMode = "system" | "light" | "dark";
 
 const KEY = "focusbox-theme";
 
 export function getStoredMode(): ThemeMode {
+  if (isDemo()) return "system";
   const v = localStorage.getItem(KEY);
   return v === "light" || v === "dark" || v === "system" ? v : "system";
 }
 
 export function storeMode(mode: ThemeMode): void {
+  if (isDemo()) return;
   localStorage.setItem(KEY, mode);
 }
 

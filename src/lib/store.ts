@@ -1,6 +1,7 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
 import type { SyncedTask } from "./syncTypes";
 import { migrateTasks } from "./taskMap";
+import { isDemo, demoTasks, demoNotesDoc } from "./demo";
 
 // TipTap document JSON (shape varies); null until the user has typed anything.
 export type NotesDoc = Record<string, unknown> | null;
@@ -35,6 +36,9 @@ export async function loadState(): Promise<AppState> {
   const empty: AppState = { tasks: [], notesDoc: null };
   const now = Date.now();
   try {
+    if (isDemo()) {
+      return { tasks: demoTasks(), notesDoc: demoNotesDoc() };
+    }
     if (isTauri) {
       const store = await getStore();
       const tasks = migrateTasks(await store.get("tasks"), now);
@@ -56,6 +60,7 @@ let pending: Partial<AppState> = {};
 
 /** Debounced, partial save. Call freely on every change. */
 export function saveState(partial: Partial<AppState>): void {
+  if (isDemo()) return; // ephemeral demo: never persist
   pending = { ...pending, ...partial };
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => void flush(), 500);
