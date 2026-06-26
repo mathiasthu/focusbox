@@ -2,6 +2,8 @@
 // preview) or on non-macOS there's no Tauri bridge, so everything degrades to
 // an "unavailable" player rather than throwing.
 
+import { isDemo } from "./demo";
+
 export type SpotifyStatus =
   | "playing"
   | "paused"
@@ -49,9 +51,11 @@ export async function spotifyControl(action: SpotifyAction): Promise<void> {
 const KEY = "focusbox-player";
 
 export function getPlayerVisible(): boolean {
+  if (isDemo()) return true;
   return localStorage.getItem(KEY) !== "0";
 }
 
 export function storePlayerVisible(visible: boolean): void {
+  if (isDemo()) return;
   localStorage.setItem(KEY, visible ? "1" : "0");
 }

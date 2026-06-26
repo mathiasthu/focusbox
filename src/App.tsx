@@ -23,8 +23,10 @@ import {
   type AccentId,
 } from "./lib/accent";
 import { getPlayerVisible, storePlayerVisible } from "./lib/spotify";
+import { isDemo } from "./lib/demo";
 
 export default function App() {
+  const demo = isDemo();
   const [loaded, setLoaded] = useState(false);
   const [tasks, setTasks] = useState<SyncedTask[]>([]);
   const [notesDoc, setNotesDoc] = useState<NotesDoc>(null);
@@ -41,7 +43,7 @@ export default function App() {
   // result back. The hook keeps both in refs, so passing fresh closures each render
   // is safe and avoids stale state.
   const sync = useSync({
-    enabled: loaded,
+    enabled: loaded && !demo,
     getLocal: () => ({
       tasks,
       notesDoc,
@@ -81,10 +83,11 @@ export default function App() {
 
   // Check for an app update once on launch (desktop only; no-ops in the browser).
   useEffect(() => {
+    if (demo) return;
     checkForUpdate().then((info) => {
       if (info) setUpdate(info);
     });
-  }, []);
+  }, [demo]);
 
   // Apply + persist the theme whenever it changes, and follow the OS when on
   // "system". (Applying is idempotent for both user and merged-remote changes.)
@@ -198,6 +201,7 @@ export default function App() {
         playerVisible={playerVisible}
         onPlayerVisibleChange={changePlayerVisible}
         sync={sync}
+        demo={demo}
       />
 
       {update && !updateDismissed && (

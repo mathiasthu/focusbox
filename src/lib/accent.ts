@@ -1,3 +1,5 @@
+import { isDemo } from "./demo";
+
 export type AccentId = "clay" | "green" | "blue" | "plum";
 
 const KEY = "focusbox-accent";
@@ -23,11 +25,13 @@ function isAccent(v: string | null): v is AccentId {
 }
 
 export function getStoredAccent(): AccentId {
+  if (isDemo()) return "clay";
   const v = localStorage.getItem(KEY);
   return isAccent(v) ? v : "clay";
 }
 
 export function storeAccent(id: AccentId): void {
+  if (isDemo()) return;
   localStorage.setItem(KEY, id);
 }
 
