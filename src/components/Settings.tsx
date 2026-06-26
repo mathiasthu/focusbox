@@ -5,12 +5,25 @@ import { SUPPORT_URL, APP_VERSION } from "../lib/config";
 import AccountSync from "./AccountSync";
 import type { SyncController } from "../hooks/useSync";
 
+function isStripeUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && (u.hostname === "stripe.com" || u.hostname.endsWith(".stripe.com"));
+  } catch {
+    return false;
+  }
+}
+
 async function openExternal(url: string) {
+  if (!isStripeUrl(url)) {
+    console.error("Focusbox: refusing to open a non-Stripe URL.", url);
+    return;
+  }
   if ("__TAURI_INTERNALS__" in window) {
     const { openUrl } = await import("@tauri-apps/plugin-opener");
     await openUrl(url);
   } else {
-    window.open(url, "_blank", "noopener");
+    window.location.assign(url);
   }
 }
 
@@ -43,6 +56,8 @@ export default function Settings({
   onPlayerVisibleChange,
   sync,
 }: Props) {
+  const isWeb = !("__TAURI_INTERNALS__" in window);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -105,27 +120,29 @@ export default function Settings({
           </div>
         </div>
 
-        <div className="setting">
-          <span className="setting__label">Spotify player</span>
-          <div className="segmented" role="group" aria-label="Spotify player">
-            <button
-              type="button"
-              className={`segmented__opt${playerVisible ? " segmented__opt--active" : ""}`}
-              aria-pressed={playerVisible}
-              onClick={() => onPlayerVisibleChange(true)}
-            >
-              On
-            </button>
-            <button
-              type="button"
-              className={`segmented__opt${!playerVisible ? " segmented__opt--active" : ""}`}
-              aria-pressed={!playerVisible}
-              onClick={() => onPlayerVisibleChange(false)}
-            >
-              Off
-            </button>
+        {!isWeb && (
+          <div className="setting">
+            <span className="setting__label">Spotify player</span>
+            <div className="segmented" role="group" aria-label="Spotify player">
+              <button
+                type="button"
+                className={`segmented__opt${playerVisible ? " segmented__opt--active" : ""}`}
+                aria-pressed={playerVisible}
+                onClick={() => onPlayerVisibleChange(true)}
+              >
+                On
+              </button>
+              <button
+                type="button"
+                className={`segmented__opt${!playerVisible ? " segmented__opt--active" : ""}`}
+                aria-pressed={!playerVisible}
+                onClick={() => onPlayerVisibleChange(false)}
+              >
+                Off
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="setting setting--col">
           <span className="setting__label">Enjoying Focusbox?</span>
