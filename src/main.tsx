@@ -14,3 +14,9 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <App />
   </React.StrictMode>,
 );
+
+// Register the service worker on the web only. The Tauri desktop bundle is built
+// from the same `vite build`, but must NOT register a SW in its webview.
+if (!("__TAURI_INTERNALS__" in window) && "serviceWorker" in navigator) {
+  import("virtual:pwa-register").then(({ registerSW }) => registerSW({ immediate: true }));
+}
