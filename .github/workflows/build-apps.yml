@@ -21,6 +21,11 @@ jobs:
   build:
     permissions:
       contents: write # needed to create the Release
+    # Updater signing secrets live ONLY in the `release` Environment (required reviewers),
+    # so every signed build pauses for explicit approval — the key can't be used by an
+    # unattended tag push. NOTE: this also means manual "Run workflow" builds wait for
+    # your approval (the build needs the signing key, which is gated here). (M3 hardening.)
+    environment: release
     strategy:
       fail-fast: false
       matrix:
@@ -60,13 +65,12 @@ jobs:
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # OPERATOR ACTION (cannot be fixed in code): TAURI_SIGNING_PRIVATE_KEY is
-          # currently passwordless and is exposed to every tag push. Recommended:
-          # passphrase-protect the key, store that passphrase as a second secret
-          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD, and move BOTH secrets into a GitHub
-          # Environment with required reviewers so signing needs an explicit approval.
+          # Signing secrets come from the `release` Environment (required reviewers).
+          # The key is still passwordless, so the password resolves to "" until a key
+          # rotation adds a TAURI_SIGNING_PRIVATE_KEY_PASSWORD Environment secret — at
+          # which point this picks it up with no further edit. (See HANDOFF / security review.)
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           # Only release on a tag push; a manual run just builds (tagName empty → no release).
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
