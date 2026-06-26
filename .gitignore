@@ -1,3 +1,6 @@
+# Brand source (derived favicons/icons/og are committed under public/)
+logos/
+
 # Logs
 logs
 *.log
@@ -28,3 +31,4 @@ docs/superpowers/
 *.njsproj
 *.sln
 *.sw?
+.superpowers/
