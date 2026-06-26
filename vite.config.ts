@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+import { sri } from "./scripts/sri-plugin";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
@@ -39,6 +40,7 @@ export default defineConfig(async () => ({
         ],
       },
     }),
+    sri(),
   ],
 
   // Vite options tailored for Tauri development; only the dev server is Tauri-specific.
