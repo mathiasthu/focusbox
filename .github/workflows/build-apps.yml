@@ -38,10 +38,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
 
@@ -57,9 +57,14 @@ jobs:
         run: npm ci
 
       - name: Build (+ publish Release on tag) with signed updater artifacts
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # OPERATOR ACTION (cannot be fixed in code): TAURI_SIGNING_PRIVATE_KEY is
+          # currently passwordless and is exposed to every tag push. Recommended:
+          # passphrase-protect the key, store that passphrase as a second secret
+          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD, and move BOTH secrets into a GitHub
+          # Environment with required reviewers so signing needs an explicit approval.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
@@ -85,7 +90,7 @@ jobs:
           args: ${{ matrix.args }}
 
       - name: Upload installer artifact (for manual runs)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_glob }}
