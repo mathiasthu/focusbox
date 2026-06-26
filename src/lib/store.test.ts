@@ -43,3 +43,29 @@ describe("store demo branch", () => {
     expect(localStorage.getItem(LS_KEY)).not.toBeNull();
   });
 });
+
+import { getStoredMode, storeMode } from "./theme";
+import { getStoredAccent, storeAccent } from "./accent";
+import { getPlayerVisible, storePlayerVisible } from "./spotify";
+
+describe("appearance prefs in demo mode", () => {
+  beforeEach(() => vi.mocked(demo.isDemo).mockReturnValue(true));
+
+  it("storeMode/storeAccent/storePlayerVisible write nothing in demo", () => {
+    const spy = vi.spyOn(Storage.prototype, "setItem");
+    storeMode("dark");
+    storeAccent("plum");
+    storePlayerVisible(false);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("getters return defaults in demo (ignore any pre-existing values)", () => {
+    localStorage.setItem("focusbox-theme", "dark");
+    localStorage.setItem("focusbox-accent", "plum");
+    localStorage.setItem("focusbox-player", "0");
+    expect(getStoredMode()).toBe("system");
+    expect(getStoredAccent()).toBe("clay");
+    expect(getPlayerVisible()).toBe(true);
+  });
+});
