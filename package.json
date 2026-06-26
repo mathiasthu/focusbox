@@ -21,7 +21,7 @@
     "@tauri-apps/plugin-store": "^2.4.3",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "@tiptap/extension-placeholder": "^3.27.0",
-    "@tiptap/extension-task-item": "^3.27.0",
+    "@tiptap/extension-task-item": "^3.27.1",
     "@tiptap/extension-task-list": "^3.27.0",
     "@tiptap/pm": "^3.27.0",
     "@tiptap/react": "^3.27.0",
