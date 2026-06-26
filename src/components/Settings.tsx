@@ -43,6 +43,7 @@ interface Props {
   playerVisible: boolean;
   onPlayerVisibleChange: (visible: boolean) => void;
   sync: SyncController;
+  demo: boolean;
 }
 
 export default function Settings({
@@ -55,6 +56,7 @@ export default function Settings({
   playerVisible,
   onPlayerVisibleChange,
   sync,
+  demo,
 }: Props) {
   const isWeb = !("__TAURI_INTERNALS__" in window);
 
@@ -84,7 +86,7 @@ export default function Settings({
           </button>
         </header>
 
-        <AccountSync sync={sync} />
+        {!demo && <AccountSync sync={sync} />}
 
         <div className="setting">
           <span className="setting__label">Appearance</span>
@@ -144,15 +146,17 @@ export default function Settings({
           </div>
         )}
 
-        <div className="setting setting--col">
-          <span className="setting__label">Enjoying Focusbox?</span>
-          <button className="support" onClick={() => openExternal(SUPPORT_URL)}>
-            <span className="support__heart">♥</span> Support Focusbox
-          </button>
-          <span className="setting__hint">
-            It's free and open source — support is optional and always appreciated.
-          </span>
-        </div>
+        {!demo && (
+          <div className="setting setting--col">
+            <span className="setting__label">Enjoying Focusbox?</span>
+            <button className="support" onClick={() => openExternal(SUPPORT_URL)}>
+              <span className="support__heart">♥</span> Support Focusbox
+            </button>
+            <span className="setting__hint">
+              It's free and open source — support is optional and always appreciated.
+            </span>
+          </div>
+        )}
 
         <p className="modal__foot">Focusbox v{APP_VERSION}</p>
       </div>
