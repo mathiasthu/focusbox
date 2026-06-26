@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check:csp": "node scripts/check-csp-clean.mjs"
+    "check:csp": "node scripts/check-csp-clean.mjs",
+    "deploy:web": "./deploy-web.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
