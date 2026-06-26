@@ -164,16 +164,11 @@ body::after {
 
 .wordmark {
   position: absolute;
-  top: 20px;
+  top: 17px;
   left: 24px;
-  font-family: var(--font-display);
-  font-weight: 500;
-  font-size: 15px;
-  letter-spacing: 0.02em;
-  color: var(--ink-soft);
-}
-.wordmark::first-letter {
-  color: var(--accent);
+  height: 20px;
+  width: auto;
+  color: var(--ink);
 }
 
 /* ---------- Support link ---------- */

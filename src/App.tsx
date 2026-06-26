@@ -160,7 +160,15 @@ export default function App() {
   return (
     <div className="app">
       <aside className="app__focus">
-        <span className="wordmark">Focusbox</span>
+        <svg className="wordmark" viewBox="35 44 452 60" role="img" aria-label="Focusbox" fill="none">
+          <title>Focusbox</title>
+          <g transform="translate(16,20) scale(1.1)">
+            <rect x="19" y="24.37" width="62" height="10.73" rx="5.37" fill="#E8920D" />
+            <rect x="19" y="44.63" width="50.08" height="10.73" rx="5.37" fill="currentColor" />
+            <rect x="19" y="64.90" width="35.77" height="10.73" rx="5.37" fill="currentColor" />
+          </g>
+          <text x="156" y="98" fontFamily="'Hanken Grotesk', sans-serif" fontWeight="700" fontSize="72" letterSpacing="-2.5" fill="currentColor">focusbox</text>
+        </svg>
         <button
           className="iconbtn gear"
           aria-label="Settings"
