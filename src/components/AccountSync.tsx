@@ -251,7 +251,8 @@ export default function AccountSync({ sync }: Props) {
         ) : (
           <div className="account__billing">
             <span className="setting__hint">
-              Start your 14-day free trial to sync across devices. Cancel anytime.
+              Sync across your devices. Monthly bills right away; annual starts with a
+              7-day free trial. Cancel anytime.
             </span>
             <div className="account__row">
               <button
