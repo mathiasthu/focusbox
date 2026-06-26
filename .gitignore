@@ -15,6 +15,9 @@ dist
 dist-ssr
 *.local
 
+# Local-only deploy target config (host/port/path) — never commit
+.deploy-web.env
+
 # Local-only project docs / agent context (not for the public repo)
 CLAUDE.md
 HANDOFF.md
