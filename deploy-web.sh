@@ -30,5 +30,15 @@ echo "→ post-push chown (read-only to Apache: root:www-data 755)…"
 ssh -p "${VPS_PORT}" "${VPS_HOST}" \
   "chown -R root:www-data '${DEST}' && find '${DEST}' -type d -exec chmod 755 {} + && find '${DEST}' -type f -exec chmod 644 {} +"
 
+echo "→ smoke check: live CSP must allow WebAssembly (libsodium needs it for login/sync)…"
+CSP=$(curl -fsS -m 10 -I "https://app.focusbox.net/" 2>/dev/null | tr -d '\r' | grep -i '^content-security-policy:' || true)
+if echo "$CSP" | grep -qi "wasm-unsafe-eval"; then
+  echo "  ✓ CSP allows wasm-unsafe-eval"
+else
+  echo "  ⚠️  WARNING: app.focusbox.net CSP is MISSING 'wasm-unsafe-eval' in script-src."
+  echo "      libsodium's WebAssembly will be CSP-blocked → login/sync break with a silent"
+  echo "      'cloud sync unavailable'. Fix the Apache vhost CSP on the VPS (see ~/focusbox-sync/DEPLOY.md)."
+fi
+
 echo "✓ web app deployed to ${DEST}. Apache serves it at https://app.focusbox.net"
 echo "  (No API restart performed — this script is isolated from deploy.sh.)"
