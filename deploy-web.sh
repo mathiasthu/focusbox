@@ -7,13 +7,30 @@
 # Both use rsync --delete, so the targets MUST stay distinct (they are).
 #
 # Usage:   ./deploy-web.sh
-# Override target via env:  FOCUSBOX_VPS_HOST=root@1.2.3.4 FOCUSBOX_VPS_PORT=22 ./deploy-web.sh
+# Configure the target host (no secrets in this public repo): either export the
+# env vars below, or copy .deploy-web.env.example → .deploy-web.env (gitignored)
+# and set them there. FOCUSBOX_VPS_HOST is REQUIRED.
+#   FOCUSBOX_VPS_HOST=root@1.2.3.4 FOCUSBOX_VPS_PORT=22 ./deploy-web.sh
 set -euo pipefail
 
-VPS_HOST="${FOCUSBOX_VPS_HOST:-root@155.94.150.24}"
-VPS_PORT="${FOCUSBOX_VPS_PORT:-52022}"
-DEST="${FOCUSBOX_WEB_PATH:-/var/www/focusbox-app}"
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+
+# Optionally source local, gitignored deploy config (host/port/path).
+if [ -f "$ROOT/.deploy-web.env" ]; then
+  # shellcheck disable=SC1091
+  . "$ROOT/.deploy-web.env"
+fi
+
+if [ -z "${FOCUSBOX_VPS_HOST:-}" ]; then
+  echo "✗ FOCUSBOX_VPS_HOST is not set." >&2
+  echo "  Set it in the environment, or copy .deploy-web.env.example → .deploy-web.env" >&2
+  echo "  (gitignored) and fill in FOCUSBOX_VPS_HOST (e.g. root@your.vps.ip)." >&2
+  exit 1
+fi
+
+VPS_HOST="${FOCUSBOX_VPS_HOST}"
+VPS_PORT="${FOCUSBOX_VPS_PORT:-22}"
+DEST="${FOCUSBOX_WEB_PATH:-/var/www/focusbox-app}"
 
 echo "→ building web bundle (tsc && vite build)…"
 ( cd "$ROOT" && npm run build )
