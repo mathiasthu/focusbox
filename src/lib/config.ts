@@ -6,7 +6,7 @@ export const SUPPORT_URL = "https://buy.stripe.com/00w7sNcd1aCY6lEazB6g80O";
 export const SUPPORT_EMAIL = "info@momentumminds.net";
 
 // Shown in the Settings dialog. Keep in sync with package.json / tauri.conf.json.
-export const APP_VERSION = "0.2.3";
+export const APP_VERSION = "0.2.4";
 
 // Cloud-sync API base URL (optional paid service). Override in dev via the
 // VITE_SYNC_API_URL env var; defaults to the production host.
