@@ -24,6 +24,16 @@ const UNAVAILABLE: SpotifyState = { status: "unavailable" };
 const isTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
+// Spotify control is macOS-only (it drives the local Spotify app via AppleScript /
+// osascript — see src-tauri/src/spotify.rs). On Windows/Linux the Rust side only ever
+// reports "unavailable", and the browser has no bridge at all. So the player + its
+// setting are shown ONLY on the macOS desktop app; everywhere else they're hidden
+// instead of rendering a permanently-dead control. The WKWebView UA still reports
+// "Macintosh" on Apple Silicon, so this is a reliable check.
+const isMac =
+  typeof navigator !== "undefined" && /\bMac/i.test(navigator.userAgent || "");
+export const isSpotifyAvailable = isTauri && isMac;
+
 export async function getSpotifyState(): Promise<SpotifyState> {
   if (!isTauri) return UNAVAILABLE;
   try {

@@ -22,7 +22,7 @@ import {
   storeAccent,
   type AccentId,
 } from "./lib/accent";
-import { getPlayerVisible, storePlayerVisible } from "./lib/spotify";
+import { getPlayerVisible, storePlayerVisible, isSpotifyAvailable } from "./lib/spotify";
 import { isDemo } from "./lib/demo";
 
 export default function App() {
@@ -185,7 +185,7 @@ export default function App() {
         </button>
         <Timer />
         <TaskList tasks={visibleTasks(tasks)} onChange={updateTasks} />
-        {playerVisible && <SpotifyPlayer />}
+        {isSpotifyAvailable && playerVisible && <SpotifyPlayer />}
       </aside>
       <main className="app__notes">
         <Notes doc={notesDoc} onChange={updateNotes} />

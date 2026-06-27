@@ -26,7 +26,8 @@ tauri-plugin-store = "2.4.3"
 tauri-plugin-http = "2"
 tauri-plugin-process = "2"
 
-# Auto-updater is desktop-only (no mobile target is built).
+# Auto-updater + single-instance are desktop-only (no mobile target is built).
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
+tauri-plugin-single-instance = "2"
 
