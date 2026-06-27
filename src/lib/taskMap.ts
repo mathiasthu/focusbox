@@ -7,6 +7,11 @@ export interface VisibleTask {
   done: boolean;
 }
 
+/** A locally-unique task id (random enough for local ids; avoids a uuid dep). */
+export function newTaskId(): string {
+  return `${performance.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 /** Live tasks for the UI: drop tombstones, sort by order then id (stable). */
 export function visibleTasks(all: SyncedTask[]): VisibleTask[] {
   return all
