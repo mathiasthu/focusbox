@@ -811,15 +811,6 @@ body::after {
   background: var(--bg-2);
 }
 
-.task__main {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  cursor: pointer;
-  flex: 1;
-  min-width: 0;
-}
-
 .task input[type="checkbox"] {
   appearance: none;
   -webkit-appearance: none;
@@ -852,15 +843,39 @@ body::after {
   transform: rotate(45deg);
 }
 
+/* Clicking the text renames the task (the checkbox is the only way to complete it),
+   so it's a full-width, chrome-free button that reads as plain text. */
 .task__text {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  font-family: inherit;
   font-size: 14.5px;
   line-height: 1.4;
   word-break: break-word;
+  color: var(--ink);
+  background: none;
+  border: none;
+  padding: 2px 0;
+  cursor: text;
   transition: color 0.15s;
 }
 .task--done .task__text {
   text-decoration: line-through;
   color: var(--ink-faint);
+}
+.task__edit {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-ui);
+  font-size: 14.5px;
+  line-height: 1.4;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  padding: 3px 7px;
+  outline: none;
 }
 
 .task__delete {
