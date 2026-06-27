@@ -679,4 +679,58 @@ describe("SyncManager", () => {
 
     expect(a.local.settings.theme).toBe("light"); // the user's choice must survive
   });
+
+  it("a task ADDED during an in-flight sync is not reverted by the completing cycle", async () => {
+    // Repro of "add a task and it disappears": the user adds a task while a sync cycle
+    // (snapshot frozen BEFORE the add) is in flight. The completing cycle must NOT roll
+    // the list back to the stale snapshot, dropping the new task.
+    const api = new FakeBackend();
+    const fk = makeFakeScheduler();
+    const a = makeDevice(api, "A", { tasks: [task("t1")] }, fk.scheduler);
+    await a.mgr.signup("task-add-race@e.com", "pw"); // initial push: tasks=[t1]
+    expect(a.local.tasks.map((t) => t.id)).toEqual(["t1"]);
+
+    // Start a cycle that blocks in-flight; its snapshot is frozen at [t1].
+    let release!: () => void;
+    api.gate = new Promise<void>((r) => (release = r));
+    const p = a.mgr.syncNow();
+    await flush(); // reach the gated getManifest
+
+    // User adds t2 while the cycle is in flight (mirrors App.updateTasks()).
+    a.local.tasks = [...a.local.tasks, task("t2")];
+    a.mgr.notifyTasksChanged();
+
+    api.gate = null;
+    release();
+    await p;
+
+    expect(a.local.tasks.map((t) => t.id)).toContain("t2"); // the add must survive
+  });
+
+  it("a task DELETED during an in-flight sync is not reverted by the completing cycle", async () => {
+    // Repro of "remove a task and it comes back": the user tombstones a task while a sync
+    // cycle (snapshot frozen BEFORE the delete) is in flight. The completing cycle must NOT
+    // resurrect it from the stale snapshot.
+    const api = new FakeBackend();
+    const fk = makeFakeScheduler();
+    const a = makeDevice(api, "A", { tasks: [task("t1"), task("t2")] }, fk.scheduler);
+    await a.mgr.signup("task-del-race@e.com", "pw"); // initial push: [t1, t2]
+
+    let release!: () => void;
+    api.gate = new Promise<void>((r) => (release = r));
+    const p = a.mgr.syncNow();
+    await flush();
+
+    // User deletes t2 (tombstone) while the cycle is in flight (mirrors updateTasks()).
+    a.local.tasks = a.local.tasks.map((t) =>
+      t.id === "t2" ? { ...t, deleted: true, updated_at: now() } : t,
+    );
+    a.mgr.notifyTasksChanged();
+
+    api.gate = null;
+    release();
+    await p;
+
+    expect(a.local.tasks.find((t) => t.id === "t2")?.deleted).toBe(true); // stays deleted
+  });
 });

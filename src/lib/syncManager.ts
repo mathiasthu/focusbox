@@ -111,6 +111,11 @@ export class SyncManager {
   private state: SyncState = emptySyncState();
   private settingsUpdatedAt = 0;
   private notesUpdatedAt = 0;
+  // Tasks have no blob-level updated_at, so we track a per-session "last local task
+  // change" clock and the value captured when the current cycle's snapshot was frozen,
+  // to detect a task edit that lands mid-cycle (same staleness guard as settings/notes).
+  private tasksUpdatedAt = 0;
+  private snapshotTasksUpdatedAt = 0;
 
   private status: SyncStatus = "signed-out";
   private lastSyncedAt: number | null = null;
@@ -277,6 +282,8 @@ export class SyncManager {
     this.state = emptySyncState();
     this.settingsUpdatedAt = 0;
     this.notesUpdatedAt = 0;
+    this.tasksUpdatedAt = 0;
+    this.snapshotTasksUpdatedAt = 0;
     this.status = "signed-out";
     this.lastError = null;
     this.recoveryKey = null;
@@ -308,6 +315,7 @@ export class SyncManager {
   }
 
   notifyTasksChanged(): void {
+    this.tasksUpdatedAt = this.d.now();
     this.scheduleSync();
   }
   notifyNotesChanged(at: number): void {
@@ -536,6 +544,9 @@ export class SyncManager {
 
   private buildLocalData(): LocalData {
     const s = this.d.getLocal();
+    // Freeze the tasks clock alongside this snapshot so applyResult can tell whether a
+    // task edit landed after the snapshot but before the cycle applied its result.
+    this.snapshotTasksUpdatedAt = this.tasksUpdatedAt;
     return {
       tasks: s.tasks,
       notes: { doc: s.notesDoc, updated_at: this.notesUpdatedAt },
@@ -589,6 +600,11 @@ export class SyncManager {
     // value the user just set stays authoritative; the already-scheduled re-sync pushes it).
     const settingsStale = res.local.settings.updated_at < this.settingsUpdatedAt;
     const notesStale = res.local.notes.updated_at < this.notesUpdatedAt;
+    // A task add/delete/edit that landed during this cycle (after its snapshot froze)
+    // makes the merged task list stale: applying it would revert the edit (the reported
+    // "add disappears / delete comes back" bug). Keep the current local list instead; the
+    // change already scheduled a re-sync that reconciles it against the server.
+    const tasksStale = this.snapshotTasksUpdatedAt < this.tasksUpdatedAt;
     this.notesUpdatedAt = Math.max(this.notesUpdatedAt, res.local.notes.updated_at);
     this.settingsUpdatedAt = Math.max(this.settingsUpdatedAt, res.local.settings.updated_at);
     if (res.conflicts.length) this.hadNotesConflict = true;
@@ -596,9 +612,9 @@ export class SyncManager {
     // UI/local data. If the write fails it propagates to syncNow() and surfaces as a
     // sync error, instead of the UI getting ahead of a baseline that never saved.
     await this.persistIdentity();
-    const cur = settingsStale || notesStale ? this.d.getLocal() : null;
+    const cur = settingsStale || notesStale || tasksStale ? this.d.getLocal() : null;
     this.d.onMerged({
-      tasks: res.local.tasks,
+      tasks: tasksStale ? cur!.tasks : res.local.tasks,
       notesDoc: notesStale ? cur!.notesDoc : res.local.notes.doc,
       settings: settingsStale
         ? cur!.settings
@@ -625,6 +641,8 @@ export class SyncManager {
     this.state = emptySyncState();
     this.notesUpdatedAt = times.notesUpdatedAt;
     this.settingsUpdatedAt = times.settingsUpdatedAt;
+    this.tasksUpdatedAt = 0;
+    this.snapshotTasksUpdatedAt = 0;
   }
 
   /** Persist for cross-launch resume, tolerating failure. Used where the in-memory
