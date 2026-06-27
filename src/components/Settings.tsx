@@ -1,7 +1,8 @@
 import { useEffect, type CSSProperties } from "react";
 import type { ThemeMode } from "../lib/theme";
 import { ACCENTS, type AccentId } from "../lib/accent";
-import { SUPPORT_URL, APP_VERSION } from "../lib/config";
+import { SUPPORT_URL, SUPPORT_EMAIL, APP_VERSION } from "../lib/config";
+import { isSpotifyAvailable } from "../lib/spotify";
 import AccountSync from "./AccountSync";
 import type { SyncController } from "../hooks/useSync";
 
@@ -24,6 +25,19 @@ async function openExternal(url: string) {
     await openUrl(url);
   } else {
     window.location.assign(url);
+  }
+}
+
+// Opens the support email in the user's mail client (Tauri opener on desktop — the
+// capability allows mailto: — or a normal mailto navigation in the browser). The URL is
+// a fixed constant, so there's no user input to guard against here.
+async function openMail() {
+  const url = `mailto:${SUPPORT_EMAIL}`;
+  if ("__TAURI_INTERNALS__" in window) {
+    const { openUrl } = await import("@tauri-apps/plugin-opener");
+    await openUrl(url);
+  } else {
+    window.location.href = url;
   }
 }
 
@@ -58,8 +72,6 @@ export default function Settings({
   sync,
   demo,
 }: Props) {
-  const isWeb = !("__TAURI_INTERNALS__" in window);
-
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -122,7 +134,7 @@ export default function Settings({
           </div>
         </div>
 
-        {!isWeb && (
+        {isSpotifyAvailable && (
           <div className="setting">
             <span className="setting__label">Spotify player</span>
             <div className="segmented" role="group" aria-label="Spotify player">
@@ -154,6 +166,18 @@ export default function Settings({
             </button>
             <span className="setting__hint">
               It's free and open source — support is optional and always appreciated.
+            </span>
+          </div>
+        )}
+
+        {!demo && (
+          <div className="setting setting--col">
+            <span className="setting__label">Help &amp; feedback</span>
+            <button type="button" className="account__link" onClick={() => void openMail()}>
+              {SUPPORT_EMAIL}
+            </button>
+            <span className="setting__hint">
+              Spotted a bug or need a hand? Email me and I'll get back to you.
             </span>
           </div>
         )}
