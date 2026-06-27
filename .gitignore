@@ -39,3 +39,6 @@ docs/superpowers/
 *.sln
 *.sw?
 .superpowers/
+
+# Playwright MCP verification artifacts (snapshots/console logs/screenshots)
+.playwright-mcp/
