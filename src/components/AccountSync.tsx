@@ -66,6 +66,7 @@ export default function AccountSync({ sync }: Props) {
   const [copied, setCopied] = useState(false);
   const [billingBusy, setBillingBusy] = useState(false);
   const [recovering, setRecovering] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
 
   async function startTrial(plan: "monthly" | "annual") {
     if (billingBusy) return;
@@ -89,6 +90,18 @@ export default function AccountSync({ sync }: Props) {
     } finally {
       setBillingBusy(false);
     }
+  }
+
+  // "Sync now": a never-subscribed account can't sync, so explain the paywall instead of
+  // silently doing nothing (a gated syncNow() is a no-op server-side). past_due is left to
+  // its own visible "update payment" block + status line so we don't stack a third message.
+  function handleSyncNow() {
+    if (sync.billingEnabled && !sync.syncEnabled && sync.subscriptionStatus !== "past_due") {
+      setSyncMsg("Subscribe to turn on sync — your tasks and notes stay on this device until you do.");
+      return;
+    }
+    setSyncMsg(null);
+    sync.syncNow();
   }
 
   async function run(action: (e: string, p: string) => Promise<void>) {
@@ -202,12 +215,22 @@ export default function AccountSync({ sync }: Props) {
     );
   }
 
-  // Signed in
+  // Signed in.
+  // Billing is on but this account may not write to sync right now.
+  const gated = sync.billingEnabled && !sync.syncEnabled;
+  const pastDue = sync.subscriptionStatus === "past_due";
+  // Gated because they've never subscribed (or it lapsed/canceled) — not a card failure.
+  const needsSubscribe = gated && !pastDue;
+
   const statusText =
     sync.status === "syncing"
       ? "Syncing…"
       : sync.status === "paused"
-        ? "Sync paused"
+        ? needsSubscribe
+          ? "Sync paused — subscribe to start syncing"
+          : pastDue
+            ? "Sync paused — payment failed"
+            : "Sync paused"
         : sync.status === "error"
           ? sync.lastError ?? "Sync error"
           : sync.lastSyncedAt
@@ -251,28 +274,36 @@ export default function AccountSync({ sync }: Props) {
         ) : (
           <div className="account__billing">
             <span className="setting__hint">
-              Sync across your devices. Monthly bills right away; annual starts with a
-              7-day free trial. Cancel anytime.
+              Sync your tasks, notes, and settings across devices — end-to-end encrypted.
+              Cancel anytime.
             </span>
             <div className="account__row">
               <button
                 className="account__btn account__btn--primary"
+                onClick={() => void startTrial("annual")}
+                disabled={billingBusy}
+              >
+                Annual · $20/yr
+              </button>
+              <button
+                className="account__btn"
                 onClick={() => void startTrial("monthly")}
                 disabled={billingBusy}
               >
-                Monthly
-              </button>
-              <button className="account__btn" onClick={() => void startTrial("annual")} disabled={billingBusy}>
-                Annual
+                Monthly · $2/mo
               </button>
             </div>
+            <span className="account__best-value">
+              ★ Best value — annual: 7-day free trial, then 2 months free vs monthly.
+              Monthly bills today, no trial.
+            </span>
           </div>
         ))}
 
       <div className="account__row">
         <button
           className="account__btn"
-          onClick={() => sync.syncNow()}
+          onClick={handleSyncNow}
           disabled={sync.status === "syncing"}
         >
           Sync now
@@ -281,6 +312,7 @@ export default function AccountSync({ sync }: Props) {
           Log out
         </button>
       </div>
+      {needsSubscribe && syncMsg && <span className="account__error">{syncMsg}</span>}
       <DeleteAccount sync={sync} />
     </div>
   );
