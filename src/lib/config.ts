@@ -3,7 +3,7 @@
 export const SUPPORT_URL = "https://buy.stripe.com/00w7sNcd1aCY6lEazB6g80O";
 
 // Shown in the Settings dialog. Keep in sync with package.json / tauri.conf.json.
-export const APP_VERSION = "0.2.2";
+export const APP_VERSION = "0.2.3";
 
 // Cloud-sync API base URL (optional paid service). Override in dev via the
 // VITE_SYNC_API_URL env var; defaults to the production host.
