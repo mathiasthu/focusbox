@@ -904,6 +904,126 @@ body::after {
   padding: 10px 8px;
 }
 
+/* ---------- Focus card (the active task pinned under the clock) ---------- */
+.focus-slot {
+  width: 100%;
+  max-width: 360px;
+  box-sizing: border-box;
+  border-radius: 12px;
+}
+
+.focus-slot--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 10px 14px;
+  border: 1px dashed var(--line-strong);
+  transition: border-color 0.15s, background 0.15s;
+}
+.focus-slot__hint {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--ink-faint);
+}
+
+/* Drag-over feedback (either state). */
+.focus-slot--over {
+  border-style: solid;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.focus-card {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-2); /* fallback */
+  background: color-mix(in srgb, var(--ink) 9%, var(--paper)); /* greyish */
+  transition: background 0.15s, border-color 0.15s;
+}
+.focus-card:hover {
+  background: var(--bg); /* fallback */
+  background: color-mix(in srgb, var(--ink) 5%, var(--paper)); /* slightly lighter */
+}
+
+.focus-card__check {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 19px;
+  height: 19px;
+  border-radius: 6px;
+  border: 1.6px solid var(--line-strong);
+  background: var(--paper);
+  cursor: pointer;
+  transition: all 0.16s;
+}
+.focus-card__check:hover {
+  border-color: var(--accent);
+}
+.focus-card__check:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.focus-card__check:checked::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 2.5px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--on-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.focus-card__text {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-ui);
+  font-size: 14.5px;
+  line-height: 1.4;
+  word-break: break-word;
+  color: var(--ink);
+}
+.focus-card--done .focus-card__text {
+  text-decoration: line-through;
+  color: var(--ink-faint);
+}
+
+.focus-card__eject {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  padding: 0 4px;
+  transition: opacity 0.15s, color 0.15s;
+}
+.focus-card:hover .focus-card__eject,
+.focus-card:focus-within .focus-card__eject {
+  opacity: 1;
+}
+.focus-card__eject:hover {
+  color: var(--accent);
+}
+/* Keyboard users: reveal + ring the eject when it receives focus (it's opacity:0 by
+   default, which would otherwise be an invisible-but-operable control). */
+.focus-card__eject:focus-visible {
+  opacity: 1;
+  color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
 /* ---------- Spotify mini-player ---------- */
 .spotify {
   width: 100%;
@@ -978,10 +1098,34 @@ body::after {
 
 /* ---------- Notes ---------- */
 .notes {
+  position: relative; /* positioning context for the per-line .note-promote button */
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
+}
+
+/* Per-line "focus this line" button, floating in the notes' left gutter. */
+.note-promote {
+  position: absolute;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  border: 1px solid var(--line-strong);
+  background: var(--paper);
+  color: var(--ink-soft);
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  z-index: 5;
+  transition: color 0.14s, border-color 0.14s;
+}
+.note-promote:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .toolbar {

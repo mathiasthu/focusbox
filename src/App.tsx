@@ -1,13 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Timer from "./components/Timer";
 import TaskList from "./components/TaskList";
-import Notes from "./components/Notes";
+import Notes, { type NotesHandle, type PromotePayload } from "./components/Notes";
+import FocusCard from "./components/FocusCard";
 import Settings from "./components/Settings";
 import SpotifyPlayer from "./components/SpotifyPlayer";
 import UpdateBanner from "./components/UpdateBanner";
 import { checkForUpdate, installUpdateAndRestart, type UpdateInfo } from "./lib/updater";
-import { loadState, saveState, type NotesDoc } from "./lib/store";
+import { loadState, saveState, loadFocusItem, saveFocusItem, type NotesDoc } from "./lib/store";
 import type { SyncedTask } from "./lib/syncTypes";
+import type { FocusItem } from "./lib/focusReturn";
 import { reconcileTasks, visibleTasks, type VisibleTask } from "./lib/taskMap";
 import { useSync } from "./hooks/useSync";
 import {
@@ -30,6 +32,13 @@ export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [tasks, setTasks] = useState<SyncedTask[]>([]);
   const [notesDoc, setNotesDoc] = useState<NotesDoc>(null);
+  // The single active task pinned under the clock (local-only; see store.ts). Notes
+  // owns the notes-doc mutations, so returning a task to the notes goes through this ref.
+  const [focusItem, setFocusItem] = useState<FocusItem | null>(null);
+  const notesRef = useRef<NotesHandle>(null);
+  // True while any drag is in flight, so the focus card can reveal a drop target
+  // only when needed (keeps the panel uncluttered when idle).
+  const [dragging, setDragging] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(getStoredMode);
   const [accent, setAccent] = useState<AccentId>(getStoredAccent);
@@ -76,8 +85,26 @@ export default function App() {
       setNotesDoc(state.notesDoc);
       setLoaded(true);
     });
+    // Restore a focus task parked under the clock from a previous session.
+    loadFocusItem().then((item) => {
+      if (active && item) setFocusItem(item);
+    });
     return () => {
       active = false;
+    };
+  }, []);
+
+  // Track whether a drag is happening anywhere, to reveal the focus drop target.
+  useEffect(() => {
+    const start = () => setDragging(true);
+    const end = () => setDragging(false);
+    window.addEventListener("dragstart", start);
+    window.addEventListener("dragend", end);
+    window.addEventListener("drop", end);
+    return () => {
+      window.removeEventListener("dragstart", start);
+      window.removeEventListener("dragend", end);
+      window.removeEventListener("drop", end);
     };
   }, []);
 
@@ -125,6 +152,41 @@ export default function App() {
     setNotesDoc(next);
     saveState({ notesDoc: next });
     sync.notifyNotesChanged(Date.now());
+  }
+
+  // ---- focus card (the active task under the clock) ----
+  // Persist on every change in the same call (no effect) to avoid a load-race that
+  // could overwrite the restored item with the initial null.
+  function setFocus(next: FocusItem | null) {
+    setFocusItem(next);
+    saveFocusItem(next);
+  }
+
+  // A notepad line was promoted (Notes already removed it from the doc). If a
+  // *promoted* task still occupies the card, return it to the notes first; a
+  // *dragged* (copy) task is simply replaced since it never left the notes.
+  function promoteFocus(p: PromotePayload) {
+    if (focusItem?.origin) notesRef.current?.returnToNotes(focusItem);
+    setFocus({ text: p.text, done: false, origin: { path: p.path, node: p.node } });
+  }
+
+  // Drag-dropped text becomes the focus item (copy — the notes are untouched, so
+  // origin is null and there's nothing to return on resolve).
+  function dragSetFocus(text: string) {
+    if (focusItem?.origin) notesRef.current?.returnToNotes(focusItem);
+    setFocus({ text, done: false, origin: null });
+  }
+
+  // Resolve the card: return a promoted task to the notes (done → checked line;
+  // not done → verbatim), then clear. Used by the time's-up reset AND the eject ✕.
+  function resolveFocus() {
+    if (!focusItem) return;
+    notesRef.current?.returnToNotes(focusItem); // no-op for dragged (origin-null) items
+    setFocus(null);
+  }
+
+  function setFocusDone(done: boolean) {
+    if (focusItem) setFocus({ ...focusItem, done });
   }
 
   // Settings changes from the UI: set state AND tell sync (merged-remote changes use
@@ -183,12 +245,19 @@ export default function App() {
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
         </button>
-        <Timer />
+        <Timer onTimeUpReset={resolveFocus} />
+        <FocusCard
+          item={focusItem}
+          dragging={dragging}
+          onToggleDone={setFocusDone}
+          onEject={resolveFocus}
+          onDropText={dragSetFocus}
+        />
         <TaskList tasks={visibleTasks(tasks)} onChange={updateTasks} />
         {isSpotifyAvailable && playerVisible && <SpotifyPlayer />}
       </aside>
       <main className="app__notes">
-        <Notes doc={notesDoc} onChange={updateNotes} />
+        <Notes ref={notesRef} doc={notesDoc} onChange={updateNotes} onPromote={promoteFocus} />
       </main>
 
       <Settings

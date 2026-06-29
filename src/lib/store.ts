@@ -1,5 +1,6 @@
 import { load, type Store } from "@tauri-apps/plugin-store";
 import type { SyncedTask } from "./syncTypes";
+import type { FocusItem } from "./focusReturn";
 import { migrateTasks } from "./taskMap";
 import { isDemo, demoTasks, demoNotesDoc } from "./demo";
 
@@ -84,5 +85,62 @@ async function flush(): Promise<void> {
     localStorage.setItem(LS_KEY, JSON.stringify({ ...current, ...toWrite }));
   } catch (err) {
     console.error("Focusbox: failed to save state.", err);
+  }
+}
+
+/** Force any pending debounced save to disk now. Used before a focus-item write so the
+ * notes deletion (promote) or re-insertion (return) lands durably TOGETHER with the
+ * focus item — closing the crash window between the immediate focus-item save and the
+ * debounced notes save. */
+export async function flushNow(): Promise<void> {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    await flush();
+  }
+}
+
+// ---- focus item (the active task under the clock) ----
+// Persisted locally so a restart mid-focus doesn't lose it, but deliberately NOT
+// part of AppState and NOT referenced by sync's getLocal — it never leaves the
+// device (see the design spec, J3). Shares the same store file / LS record under
+// its own "focusItem" key, so it can't clobber tasks/notesDoc.
+const FOCUS_KEY = "focusItem";
+
+export async function loadFocusItem(): Promise<FocusItem | null> {
+  if (isDemo()) return null;
+  try {
+    if (isTauri) {
+      const store = await getStore();
+      return (await store.get<FocusItem>(FOCUS_KEY)) ?? null;
+    }
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return null;
+    return (JSON.parse(raw).focusItem as FocusItem) ?? null;
+  } catch (err) {
+    console.error("Focusbox: failed to load focus item.", err);
+    return null;
+  }
+}
+
+export async function saveFocusItem(item: FocusItem | null): Promise<void> {
+  if (isDemo()) return; // ephemeral demo: never persist
+  try {
+    // Persist any pending notes/tasks first, so the line's removal-from-notes (or
+    // return-to-notes) is durable together with this focus-item change — never one
+    // without the other (avoids a quit/crash within the 500ms debounce losing or
+    // duplicating the parked line).
+    await flushNow();
+    if (isTauri) {
+      const store = await getStore();
+      await store.set(FOCUS_KEY, item);
+      await store.save();
+      return;
+    }
+    const raw = localStorage.getItem(LS_KEY);
+    const current = raw ? JSON.parse(raw) : {};
+    localStorage.setItem(LS_KEY, JSON.stringify({ ...current, focusItem: item }));
+  } catch (err) {
+    console.error("Focusbox: failed to save focus item.", err);
   }
 }
