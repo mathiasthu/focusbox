@@ -8,7 +8,8 @@ import UpdateBanner from "./components/UpdateBanner";
 import { checkForUpdate, installUpdateAndRestart, type UpdateInfo } from "./lib/updater";
 import { loadState, saveState, type NotesDoc } from "./lib/store";
 import type { SyncedTask } from "./lib/syncTypes";
-import { reconcileTasks, visibleTasks, type VisibleTask } from "./lib/taskMap";
+import { newTaskId, reconcileTasks, visibleTasks, type VisibleTask } from "./lib/taskMap";
+import { appendTaskLines } from "./lib/notesEdit";
 import { useSync } from "./hooks/useSync";
 import {
   applyTheme,
@@ -127,6 +128,36 @@ export default function App() {
     sync.notifyNotesChanged(Date.now());
   }
 
+  // Clock toolbar button: each selected notepad line becomes a new left task.
+  function addTasksFromNotes(lines: string[]) {
+    const additions: VisibleTask[] = lines.map((text) => ({
+      id: newTaskId(),
+      text,
+      done: false,
+    }));
+    if (additions.length === 0) return;
+    updateTasks([...visibleTasks(tasks), ...additions]);
+  }
+
+  // End-of-session reset (fired only when the timer ran out): drop the marked
+  // (completed) tasks, return the unmarked ones to the notepad as lines, and
+  // leave the left task list empty.
+  function handleTimeUpReset() {
+    const visible = visibleTasks(tasks);
+    if (visible.length === 0) return;
+    const unmarked = visible.filter((t) => !t.done).map((t) => t.text);
+    updateTasks([]);
+    if (unmarked.length > 0) {
+      // The notepad only picks up an external doc change while it is NOT focused
+      // (see the effect in Notes.tsx). On macOS WebKit, clicking the timer's
+      // Reset button does NOT blur a focused contenteditable, so blur it here —
+      // otherwise the returned task lines would never render and the next
+      // keystroke would overwrite them. Harmless no-op when nothing is focused.
+      (document.activeElement as HTMLElement | null)?.blur();
+      updateNotes(appendTaskLines(notesDoc, unmarked));
+    }
+  }
+
   // Settings changes from the UI: set state AND tell sync (merged-remote changes use
   // the raw setters in onMerged, which don't notify).
   function changeTheme(mode: ThemeMode) {
@@ -183,12 +214,12 @@ export default function App() {
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
         </button>
-        <Timer />
+        <Timer onTimeUpReset={handleTimeUpReset} />
         <TaskList tasks={visibleTasks(tasks)} onChange={updateTasks} />
         {isSpotifyAvailable && playerVisible && <SpotifyPlayer />}
       </aside>
       <main className="app__notes">
-        <Notes doc={notesDoc} onChange={updateNotes} />
+        <Notes doc={notesDoc} onChange={updateNotes} onAddTasks={addTasksFromNotes} />
       </main>
 
       <Settings
