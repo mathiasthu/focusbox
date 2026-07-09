@@ -19,6 +19,16 @@ State persists in localStorage (`focusbox-state`), so reloads test persistence.
 
 ## Gotchas
 
+- **Launching the desktop app (`npm run tauri dev`): kill ALL zombies first.**
+  The single-instance plugin makes any surviving Focusbox process (installed
+  app, `target/release/bundle` binary, prior dev run) swallow the new launch —
+  the fresh binary focuses the zombie and exits. A zombie vite on :1420 also
+  kills `beforeDevCommand`. Run:
+  `pkill -f "tauri dev"; pkill -f "node_modules/.bin/vite"; pkill -f "target/debug/focusbox"; pkill -f "target/release/bundle/macos/Focusbox"`
+  then launch and confirm `pgrep -f target/debug/focusbox` stays alive.
+- zsh: never `echo ===` in Bash tool commands (`=`-prefixed words trigger
+  zsh command-path expansion and abort the chain); quote or use `---`.
+
 - Console shows a `manifest.webmanifest` syntax error in dev — PWA plugin
   artifact, ignore.
 - Seeding notes: `document.execCommand('insertText'/'insertParagraph')` on the
