@@ -30,13 +30,12 @@ function clampInt(value: string, max: number): number {
 }
 
 interface Props {
-  // Fired by reset() ONLY when the timer had run out (the "time's up" state), so
-  // the focus card resolves (returns the active task to the notes) only on the
-  // end-of-session reset. A plain mid-session reset does NOT fire this.
-  onTimeUpReset?: () => void;
+  // Fired on EVERY Reset click. wasFinished is true when the timer had run
+  // out (the "time's up" state) — callers gate end-of-session-only flows on it.
+  onReset?: (wasFinished: boolean) => void;
 }
 
-export default function Timer({ onTimeUpReset }: Props) {
+export default function Timer({ onReset }: Props) {
   const [durationSec, setDurationSec] = useState(30 * 60);
   // Remaining time in milliseconds — drives both the readout and the ring.
   const [remainingMs, setRemainingMs] = useState(30 * 60 * 1000);
@@ -107,8 +106,7 @@ export default function Timer({ onTimeUpReset }: Props) {
     setRunning(false);
     setFinished(false);
     setRemainingMs(durationMs);
-    // Only the end-of-session (time's-up) reset resolves the focus card.
-    if (wasFinished) onTimeUpReset?.();
+    onReset?.(wasFinished);
   }
   // Extend after finishing: start a fresh countdown of `sec` right away so the
   // ring refills and depletes over the new block.

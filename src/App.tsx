@@ -10,7 +10,8 @@ import { checkForUpdate, installUpdateAndRestart, type UpdateInfo } from "./lib/
 import { loadState, saveState, loadFocusItem, saveFocusItem, type NotesDoc } from "./lib/store";
 import type { SyncedTask } from "./lib/syncTypes";
 import type { FocusItem } from "./lib/focusReturn";
-import { reconcileTasks, visibleTasks, type VisibleTask } from "./lib/taskMap";
+import { newTaskId, reconcileTasks, visibleTasks, type VisibleTask } from "./lib/taskMap";
+import { appendTaskLines } from "./lib/notesEdit";
 import { useSync } from "./hooks/useSync";
 import {
   applyTheme,
@@ -164,29 +165,83 @@ export default function App() {
 
   // A notepad line was promoted (Notes already removed it from the doc). If a
   // *promoted* task still occupies the card, return it to the notes first; a
-  // *dragged* (copy) task is simply replaced since it never left the notes.
+  // *dragged-in* plain-text task (origin null) is simply replaced since it
+  // never left the notes.
   function promoteFocus(p: PromotePayload) {
     if (focusItem?.origin) notesRef.current?.returnToNotes(focusItem);
     setFocus({ text: p.text, done: false, origin: { path: p.path, node: p.node } });
   }
 
-  // Drag-dropped text becomes the focus item (copy — the notes are untouched, so
-  // origin is null and there's nothing to return on resolve).
-  function dragSetFocus(text: string) {
+  // A notepad line was dragged onto the card. Notes stashed the line on
+  // dragstart; taking it deletes it from the doc and hands back the payload
+  // (move semantics). Plain-text drags from outside the editor fall back to a
+  // no-origin item.
+  function dropSetFocus(text: string) {
+    const p = notesRef.current?.takePendingDrag();
+    if (p) {
+      promoteFocus(p);
+      return;
+    }
     if (focusItem?.origin) notesRef.current?.returnToNotes(focusItem);
     setFocus({ text, done: false, origin: null });
   }
 
-  // Resolve the card: return a promoted task to the notes (done → checked line;
-  // not done → verbatim), then clear. Used by the time's-up reset AND the eject ✕.
-  function resolveFocus() {
-    if (!focusItem) return;
-    notesRef.current?.returnToNotes(focusItem); // no-op for dragged (origin-null) items
+  // Resolve the card: return a promoted task to the notes (done → struck
+  // through; not done → verbatim), then clear. Used by every Reset, the
+  // complete checkbox AND the eject ✕.
+  function resolveFocus(item?: FocusItem) {
+    const current = item ?? focusItem;
+    if (!current) return;
+    notesRef.current?.returnToNotes(current); // no-op for no-origin items
     setFocus(null);
   }
 
+  // Completing the task resolves the card immediately (returns the line to the
+  // notes struck through).
   function setFocusDone(done: boolean) {
-    if (focusItem) setFocus({ ...focusItem, done });
+    if (!focusItem) return;
+    if (done) resolveFocus({ ...focusItem, done: true });
+    else setFocus({ ...focusItem, done: false });
+  }
+
+  // Fired on EVERY Reset click: an unresolved focus task goes back to the notes.
+  // The left-tasklist shuffle stays gated to the end-of-session (time's-up) reset.
+  function handleReset(wasFinished: boolean) {
+    if (focusItem) {
+      (document.activeElement as HTMLElement | null)?.blur();
+      resolveFocus();
+    }
+    if (wasFinished) handleTimeUpReset();
+  }
+
+  // Clock toolbar button: each selected notepad line becomes a new left task.
+  function addTasksFromNotes(lines: string[]) {
+    const additions: VisibleTask[] = lines.map((text) => ({
+      id: newTaskId(),
+      text,
+      done: false,
+    }));
+    if (additions.length === 0) return;
+    updateTasks([...visibleTasks(tasks), ...additions]);
+  }
+
+  // End-of-session reset (fired only when the timer ran out): drop the marked
+  // (completed) tasks, return the unmarked ones to the notepad as lines, and
+  // leave the left task list empty.
+  function handleTimeUpReset() {
+    const visible = visibleTasks(tasks);
+    if (visible.length === 0) return;
+    const unmarked = visible.filter((t) => !t.done).map((t) => t.text);
+    updateTasks([]);
+    if (unmarked.length > 0) {
+      // The notepad only picks up an external doc change while it is NOT focused
+      // (see the effect in Notes.tsx). On macOS WebKit, clicking the timer's
+      // Reset button does NOT blur a focused contenteditable, so blur it here —
+      // otherwise the returned task lines would never render and the next
+      // keystroke would overwrite them. Harmless no-op when nothing is focused.
+      (document.activeElement as HTMLElement | null)?.blur();
+      updateNotes(appendTaskLines(notesDoc, unmarked));
+    }
   }
 
   // Settings changes from the UI: set state AND tell sync (merged-remote changes use
@@ -245,19 +300,27 @@ export default function App() {
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
         </button>
-        <Timer onTimeUpReset={resolveFocus} />
+        <Timer onReset={handleReset} />
         <FocusCard
           item={focusItem}
           dragging={dragging}
           onToggleDone={setFocusDone}
-          onEject={resolveFocus}
-          onDropText={dragSetFocus}
+          onEject={() => {
+            if (focusItem) resolveFocus({ ...focusItem, done: false }); // ✕ = cancel, verbatim
+          }}
+          onDropText={dropSetFocus}
         />
         <TaskList tasks={visibleTasks(tasks)} onChange={updateTasks} />
         {isSpotifyAvailable && playerVisible && <SpotifyPlayer />}
       </aside>
       <main className="app__notes">
-        <Notes ref={notesRef} doc={notesDoc} onChange={updateNotes} onPromote={promoteFocus} />
+        <Notes
+          ref={notesRef}
+          doc={notesDoc}
+          onChange={updateNotes}
+          onPromote={promoteFocus}
+          onAddTasks={addTasksFromNotes}
+        />
       </main>
 
       <Settings

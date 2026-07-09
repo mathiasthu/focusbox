@@ -34,22 +34,6 @@ function asDoc(doc: Doc): Node | null {
   return doc && typeof doc === "object" ? (doc as Node) : null;
 }
 
-/** Build a checked checklist line (a one-item taskList) carrying `text`. */
-export function checkedLine(text: string): Node {
-  return {
-    type: "taskList",
-    content: [
-      {
-        type: "taskItem",
-        attrs: { checked: true },
-        content: [
-          { type: "paragraph", content: text ? [{ type: "text", text }] : [] },
-        ],
-      },
-    ],
-  };
-}
-
 // Wrap a bare list item in a minimal list so it stays a valid top-level block.
 function wrapForTopLevel(node: Node): Node {
   if (node.type === "taskItem") return { type: "taskList", content: [node] };
@@ -101,16 +85,33 @@ export function insertNodeAtPath(doc: Doc, path: number[], node: Node): Doc {
 }
 
 /**
+ * Deep-copy `node` with a strike mark added to every text leaf (deduped), so a
+ * completed task returns to the notes crossed out but otherwise verbatim.
+ */
+export function strikeNode(node: Node): Node {
+  const copy: Node = JSON.parse(JSON.stringify(node));
+  const walk = (n: Node) => {
+    if (n.type === "text") {
+      const marks = Array.isArray(n.marks) ? (n.marks as Node[]) : [];
+      if (!marks.some((m) => m && m.type === "strike")) {
+        n.marks = [...marks, { type: "strike" }];
+      }
+    }
+    if (Array.isArray(n.content)) n.content.forEach(walk);
+  };
+  walk(copy);
+  return copy;
+}
+
+/**
  * Return a focus item to the notes doc (new doc; no mutation):
- *  - dragged copy (origin null) → doc unchanged (it never left the notes).
- *  - done   → a checked checklist line at the original top-level index.
+ *  - no-origin item (plain-text drag) → doc unchanged (it never left the notes).
+ *  - done   → the original node, struck through, at its recorded path.
  *  - not done → the original node verbatim at its recorded path.
  */
 export function returnItemToNotes(doc: Doc, item: FocusItem): Doc {
   const { origin } = item;
   if (!origin) return doc;
-  if (item.done) {
-    return insertNodeAtPath(doc, [origin.path[0] ?? 0], checkedLine(item.text));
-  }
-  return insertNodeAtPath(doc, origin.path, origin.node);
+  const node = item.done ? strikeNode(origin.node) : origin.node;
+  return insertNodeAtPath(doc, origin.path, node);
 }

@@ -25,10 +25,13 @@ export default function FocusCard({ item, dragging, onToggleDone, onEject, onDro
       // Only accept drags carrying text.
       if (!e.dataTransfer.types.includes("text/plain")) return;
       e.preventDefault();
-      // Force COPY (J1): ProseMirror starts a no-modifier drag as a MOVE, which would
-      // make WebKit delete the dragged text from the notepad. Negotiating "copy" here
-      // leaves the source untouched.
-      e.dataTransfer.dropEffect = "copy";
+      // A gutter-handle line drag (custom MIME) is a MOVE — Notes deletes the line
+      // on drop. Anything else (a plain text selection) negotiates COPY: ProseMirror
+      // starts a no-modifier drag as a MOVE, which would make WebKit delete the
+      // dragged text from the notepad.
+      e.dataTransfer.dropEffect = e.dataTransfer.types.includes("application/x-focusbox-line")
+        ? "move"
+        : "copy";
       if (!over) setOver(true);
     },
     onDragLeave: (e: React.DragEvent) => {

@@ -21,15 +21,19 @@ export interface PromotePayload {
   node: PMNode;
 }
 
-/** Imperative API App uses to push a focus item back into the notes (the return). */
+/** Imperative API App uses to push a focus item back into the notes (the return),
+ * and to take a line stashed by an in-flight drag (move semantics: taking deletes
+ * it from the doc). */
 export interface NotesHandle {
   returnToNotes: (item: FocusItem) => void;
+  takePendingDrag: () => PromotePayload | null;
 }
 
 interface Props {
   doc: NotesDoc;
   onChange: (doc: NotesDoc) => void;
   onPromote: (p: PromotePayload) => void;
+  onAddTasks: (lines: string[]) => void;
 }
 
 const LIST_TYPES = new Set(["taskList", "bulletList", "orderedList"]);
@@ -39,11 +43,13 @@ function Btn({
   onClick,
   label,
   children,
+  disabled,
 }: {
   active?: boolean;
   onClick: () => void;
   label: string;
   children: ReactNode;
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -52,6 +58,7 @@ function Btn({
       aria-label={label}
       aria-pressed={active}
       title={label}
+      disabled={disabled}
       onMouseDown={(e) => e.preventDefault()} // keep editor selection
       onClick={onClick}
     >
@@ -60,10 +67,17 @@ function Btn({
   );
 }
 
-function Toolbar({ editor }: { editor: Editor | null }) {
+function Toolbar({
+  editor,
+  onAddTasks,
+}: {
+  editor: Editor | null;
+  onAddTasks: (lines: string[]) => void;
+}) {
   // In TipTap v3, useEditor does not re-render on every transaction. Derive the
   // active states reactively so highlights track the cursor (and clear when it
   // leaves formatted text) instead of getting stuck "on" after a command.
+  // hasSelection drives the clock button (enabled only when text is selected).
   const active = useEditorState({
     editor,
     selector: ({ editor }) =>
@@ -77,12 +91,25 @@ function Toolbar({ editor }: { editor: Editor | null }) {
             bullet: editor.isActive("bulletList"),
             ordered: editor.isActive("orderedList"),
             task: editor.isActive("taskList"),
+            hasSelection: !editor.state.selection.empty,
           }
         : null,
   });
 
   if (!editor || !active) return <div className="toolbar" />;
   const chain = () => editor.chain().focus();
+
+  // Send the current selection to the left task list — one task per line. The
+  // toolbar buttons preventDefault on mousedown, so the selection survives the
+  // click. Block nodes (paragraphs, list items) are separated by "\n".
+  function addSelectionAsTasks() {
+    if (!editor) return;
+    const { from, to } = editor.state.selection;
+    if (from === to) return;
+    const text = editor.state.doc.textBetween(from, to, "\n", "\n");
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (lines.length > 0) onAddTasks(lines);
+  }
   return (
     <div className="toolbar">
       <Btn label="Heading 1" active={active.h1} onClick={() => chain().toggleHeading({ level: 1 }).run()}>
@@ -128,11 +155,27 @@ function Toolbar({ editor }: { editor: Editor | null }) {
           <rect x="1.5" y="9.5" width="6" height="6" rx="1.4" />
         </svg>
       </Btn>
+
+      <span className="toolbar__sep" />
+
+      <Btn
+        label="Add selected lines to tasks"
+        disabled={!active.hasSelection}
+        onClick={addSelectionAsTasks}
+      >
+        <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="9" cy="9" r="6.75" />
+          <path d="M9 5.2V9l2.6 1.6" />
+        </svg>
+      </Btn>
     </div>
   );
 }
 
-const Notes = forwardRef<NotesHandle, Props>(function Notes({ doc, onChange, onPromote }, ref) {
+const Notes = forwardRef<NotesHandle, Props>(function Notes(
+  { doc, onChange, onPromote, onAddTasks },
+  ref,
+) {
   const editor = useEditor({
     extensions: [
       StarterKit,
@@ -182,10 +225,15 @@ const Notes = forwardRef<NotesHandle, Props>(function Notes({ doc, onChange, onP
     };
   }, []);
 
+  // A line stashed by an in-flight drag from the gutter handle. Deleting the drag
+  // source mid-drag aborts HTML5 drags on WebKit, so deletion is deferred to the
+  // drop side (takePendingDrag); a cancelled drag just clears the stash.
+  const pendingDragRef = useRef<{ payload: PromotePayload; range: { from: number; to: number } } | null>(null);
+
   // Return a focus item to the notes by re-inserting it into the LIVE editor doc
-  // (source of truth — avoids racing App's notesDoc state). No-op for dragged
-  // (origin-null) items, which never left the notes. emitUpdate:true so the change
-  // flows back through onChange → persistence + sync.
+  // (source of truth — avoids racing App's notesDoc state). No-op for no-origin
+  // items, which never left the notes. emitUpdate:true so the change flows back
+  // through onChange → persistence + sync.
   useImperativeHandle(
     ref,
     () => ({
@@ -193,6 +241,17 @@ const Notes = forwardRef<NotesHandle, Props>(function Notes({ doc, onChange, onP
         if (!editor || !item.origin) return;
         const next = returnItemToNotes(editor.getJSON() as Record<string, unknown>, item);
         editor.commands.setContent(next as Record<string, unknown>, { emitUpdate: true });
+      },
+      takePendingDrag() {
+        const pending = pendingDragRef.current;
+        pendingDragRef.current = null;
+        if (!pending || !editor) return null;
+        try {
+          editor.chain().deleteRange(pending.range).run();
+        } catch {
+          return null; // doc changed under the drag — treat as a plain-text copy
+        }
+        return pending.payload;
       },
     }),
     [editor],
@@ -259,11 +318,11 @@ const Notes = forwardRef<NotesHandle, Props>(function Notes({ doc, onChange, onP
     setPromoteAt({ top: r.top - hr.top + r.height / 2, left });
   }
 
-  // Resolve the hovered line to {text, path, node, range} via ProseMirror, remove it
-  // from the doc, and hand it up to become the focus item.
-  function doPromote() {
+  // Resolve the hovered line element to {text, path, node} + its delete range via
+  // ProseMirror. Shared by the click-promote and drag-move paths.
+  function resolveHoveredLine(): { payload: PromotePayload; range: { from: number; to: number } } | null {
     const el = lineElRef.current;
-    if (!el || !editor) return;
+    if (!el || !editor) return null;
     const view = editor.view;
     let payload: PromotePayload | null = null;
     let range: { from: number; to: number } | null = null;
@@ -305,17 +364,36 @@ const Notes = forwardRef<NotesHandle, Props>(function Notes({ doc, onChange, onP
         };
       }
     } catch {
-      clearPromote(); // detached/replaced line (e.g. after an external sync) — bail
-      return;
+      return null; // detached/replaced line (e.g. after an external sync) — bail
     }
 
-    if (!payload || !range || !payload.text.trim()) {
-      clearPromote();
+    if (!payload || !range || !payload.text.trim()) return null;
+    return { payload, range };
+  }
+
+  // Click on the gutter button: remove the line from the doc and hand it up to
+  // become the focus item.
+  function doPromote() {
+    if (!editor) return;
+    const resolved = resolveHoveredLine();
+    clearPromote();
+    if (!resolved) return;
+    editor.chain().deleteRange(resolved.range).run();
+    onPromote(resolved.payload);
+  }
+
+  // Drag from the gutter button: stash the line (move happens on drop, via
+  // takePendingDrag) and put its text on the drag so outside targets still work.
+  function onHandleDragStart(e: React.DragEvent) {
+    const resolved = resolveHoveredLine();
+    if (!resolved) {
+      e.preventDefault();
       return;
     }
-    editor.chain().deleteRange(range).run();
-    clearPromote();
-    onPromote(payload);
+    pendingDragRef.current = resolved;
+    e.dataTransfer.setData("application/x-focusbox-line", "1");
+    e.dataTransfer.setData("text/plain", resolved.payload.text);
+    e.dataTransfer.effectAllowed = "move";
   }
 
   return (
@@ -327,7 +405,7 @@ const Notes = forwardRef<NotesHandle, Props>(function Notes({ doc, onChange, onP
       onMouseMove={(e) => refreshPromote(e.target as HTMLElement)}
       onMouseLeave={clearPromote}
     >
-      <Toolbar editor={editor} />
+      <Toolbar editor={editor} onAddTasks={onAddTasks} />
       <div className="notes__scroll" onScroll={clearPromote}>
         <EditorContent editor={editor} className="notes__editor" />
       </div>
@@ -337,7 +415,13 @@ const Notes = forwardRef<NotesHandle, Props>(function Notes({ doc, onChange, onP
           className="note-promote"
           style={{ top: promoteAt.top, left: promoteAt.left }}
           aria-label="Move this line under the timer"
-          title="Focus on this line"
+          title="Focus on this line (click or drag to the timer)"
+          draggable
+          onDragStart={onHandleDragStart}
+          onDragEnd={() => {
+            pendingDragRef.current = null; // drop cancelled/elsewhere → line stays
+            clearPromote();
+          }}
           onMouseDown={(e) => e.preventDefault()}
           onClick={doPromote}
         >

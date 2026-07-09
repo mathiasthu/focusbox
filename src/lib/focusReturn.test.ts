@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  checkedLine,
   insertNodeAtPath,
   returnItemToNotes,
+  strikeNode,
   type FocusItem,
 } from "./focusReturn";
 
@@ -94,18 +94,36 @@ describe("insertNodeAtPath — into a list", () => {
   });
 });
 
-describe("checkedLine", () => {
-  it("builds a checked taskList line carrying the text", () => {
-    const node = checkedLine("ship it") as any;
-    expect(node.type).toBe("taskList");
-    expect(node.content[0].type).toBe("taskItem");
-    expect(node.content[0].attrs.checked).toBe(true);
-    expect(node.content[0].content[0].content[0].text).toBe("ship it");
+describe("strikeNode", () => {
+  it("adds a strike mark to every text leaf, preserving existing marks", () => {
+    const node = {
+      type: "paragraph",
+      content: [
+        { type: "text", text: "plain" },
+        { type: "text", text: "bold", marks: [{ type: "bold" }] },
+      ],
+    };
+    const out = strikeNode(node) as any;
+    expect(out.content[0].marks).toEqual([{ type: "strike" }]);
+    expect(out.content[1].marks).toEqual([{ type: "bold" }, { type: "strike" }]);
   });
 
-  it("produces an empty paragraph (no text leaf) for empty text", () => {
-    const node = checkedLine("") as any;
-    expect(node.content[0].content[0].content).toEqual([]);
+  it("does not duplicate an existing strike mark", () => {
+    const node = { type: "paragraph", content: [{ type: "text", text: "x", marks: [{ type: "strike" }] }] };
+    const out = strikeNode(node) as any;
+    expect(out.content[0].marks).toEqual([{ type: "strike" }]);
+  });
+
+  it("recurses into nested content and does not mutate the input", () => {
+    const node = {
+      type: "taskItem",
+      attrs: { checked: false },
+      content: [{ type: "paragraph", content: [{ type: "text", text: "deep" }] }],
+    };
+    const before = JSON.stringify(node);
+    const out = strikeNode(node) as any;
+    expect(out.content[0].content[0].marks).toEqual([{ type: "strike" }]);
+    expect(JSON.stringify(node)).toBe(before);
   });
 });
 
@@ -125,20 +143,28 @@ describe("returnItemToNotes", () => {
     expect(out.content.map((n: any) => n.content[0].text)).toEqual(["a", "write report", "b"]);
   });
 
-  it("reinserts as a checked checklist line at the top-level index when done", () => {
+  it("reinserts the original block struck through at its path when done", () => {
     const node = para("write report");
     const item: FocusItem = { text: "write report", done: true, origin: origin([1], node) };
     const out = returnItemToNotes(paras("a", "b"), item) as any;
-    expect(out.content[1].type).toBe("taskList");
-    expect(out.content[1].content[0].attrs.checked).toBe(true);
-    expect(lineText(out.content[1])).toBe("write report");
+    expect(out.content.map((n: any) => n.content[0].text)).toEqual(["a", "write report", "b"]);
+    expect(out.content[1].content[0].marks).toEqual([{ type: "strike" }]);
   });
 
-  it("a done item with a [i,j] origin returns as a top-level checked line at index i", () => {
+  it("a done item with a [i,j] origin returns struck through into the list", () => {
     const node = { type: "taskItem", attrs: { checked: false }, content: [para("write report")] };
+    const list = {
+      type: "doc",
+      content: [
+        para("intro"),
+        { type: "taskList", content: [{ type: "taskItem", attrs: { checked: false }, content: [para("other")] }] },
+      ],
+    };
     const item: FocusItem = { text: "write report", done: true, origin: origin([1, 0], node) };
-    const out = returnItemToNotes(paras("a", "b"), item) as any;
+    const out = returnItemToNotes(list, item) as any;
     expect(out.content[1].type).toBe("taskList");
-    expect(out.content[1].content[0].attrs.checked).toBe(true);
+    expect(lineText(out.content[1])).toBe("write report");
+    expect(out.content[1].content[0].content[0].content[0].marks).toEqual([{ type: "strike" }]);
+    expect(out.content[1].content[0].attrs.checked).toBe(false);
   });
 });
