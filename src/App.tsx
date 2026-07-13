@@ -1,12 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { Editor } from "@tiptap/react";
 import Timer from "./components/Timer";
 import TaskList from "./components/TaskList";
-import Notes from "./components/Notes";
+import Notes, { LINE_DRAG_MIME } from "./components/Notes";
+import FocusCard from "./components/FocusCard";
 import Settings from "./components/Settings";
 import SpotifyPlayer from "./components/SpotifyPlayer";
 import UpdateBanner from "./components/UpdateBanner";
 import { checkForUpdate, installUpdateAndRestart, type UpdateInfo } from "./lib/updater";
 import { loadState, saveState, type NotesDoc } from "./lib/store";
+import { getFocusedTask, clearFocused, markFocusedDone } from "./lib/focusedLine";
 import type { SyncedTask } from "./lib/syncTypes";
 import { newTaskId, reconcileTasks, visibleTasks, type VisibleTask } from "./lib/taskMap";
 import { appendTaskLines } from "./lib/notesEdit";
@@ -39,6 +42,9 @@ export default function App() {
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateError, setUpdateError] = useState(false);
   const [updateDismissed, setUpdateDismissed] = useState(false);
+  const editorRef = useRef<Editor | null>(null);
+  const [lineDragging, setLineDragging] = useState(false);
+  const focusTask = getFocusedTask(notesDoc);
 
   // Cloud sync (optional). getLocal reads current state; onMerged applies a merged
   // result back. The hook keeps both in refs, so passing fresh closures each render
@@ -158,6 +164,34 @@ export default function App() {
     }
   }
 
+  // Drop from the notepad drag-handle: mark that line as the focus task.
+  // The editor command mutates the doc, which flows back via onUpdate → updateNotes.
+  function handleFocusDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setLineDragging(false);
+    const raw = e.dataTransfer.getData(LINE_DRAG_MIME);
+    if (!raw) return;
+    const pos = Number(raw);
+    if (!Number.isInteger(pos) || pos < 0) return;
+    editorRef.current?.commands.setFocusedLineAt(pos);
+  }
+
+  // Card ✓/✕: write done into the note (strike/check), keep the card until reset.
+  // Blur first: Notes only applies external doc changes while unfocused (see the
+  // isFocused guard in Notes.tsx), same trick as handleTimeUpReset.
+  function handleFocusDone() {
+    (document.activeElement as HTMLElement | null)?.blur();
+    updateNotes(markFocusedDone(notesDoc));
+  }
+
+  // Any user Reset clears the focus task (highlight + card). Done strikethrough
+  // stays in the note — clearFocused only drops the attribute.
+  function handleTimerReset() {
+    if (!focusTask) return;
+    (document.activeElement as HTMLElement | null)?.blur();
+    updateNotes(clearFocused(notesDoc));
+  }
+
   // Settings changes from the UI: set state AND tell sync (merged-remote changes use
   // the raw setters in onMerged, which don't notify).
   function changeTheme(mode: ThemeMode) {
@@ -214,12 +248,34 @@ export default function App() {
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
         </button>
-        <Timer onTimeUpReset={handleTimeUpReset} />
+        <Timer onTimeUpReset={handleTimeUpReset} onReset={handleTimerReset} />
+        {(lineDragging || focusTask) && (
+          <div
+            className={`focus-slot${lineDragging ? " focus-slot--target" : ""}`}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+            }}
+            onDrop={handleFocusDrop}
+          >
+            {focusTask ? (
+              <FocusCard task={focusTask} onDone={handleFocusDone} />
+            ) : (
+              <span className="focus-slot__hint">drop here to focus</span>
+            )}
+          </div>
+        )}
         <TaskList tasks={visibleTasks(tasks)} onChange={updateTasks} />
         {isSpotifyAvailable && playerVisible && <SpotifyPlayer />}
       </aside>
       <main className="app__notes">
-        <Notes doc={notesDoc} onChange={updateNotes} onAddTasks={addTasksFromNotes} />
+        <Notes
+          doc={notesDoc}
+          onChange={updateNotes}
+          onAddTasks={addTasksFromNotes}
+          onEditorReady={(ed) => { editorRef.current = ed; }}
+          onLineDragChange={setLineDragging}
+        />
       </main>
 
       <Settings
