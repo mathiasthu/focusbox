@@ -13,6 +13,7 @@ interface Props {
   onAddTasks: (lines: string[]) => void;
   onEditorReady: (editor: Editor | null) => void;
   onLineDragChange: (dragging: boolean) => void;
+  onFocusLine: (pos: number) => void;
   showTasks: boolean;
   focusDone: boolean;
 }
@@ -111,19 +112,37 @@ function MenuBar({
   );
 }
 
+// Walk up from the selection's $from to the nearest listItem/taskItem ancestor
+// (a "focusable" line for the timer's focus slot). Returns its doc position
+// (the node itself, for setFocusedLineAt) plus whether it's already focused.
+function findFocusableLine(editor: Editor): { pos: number; focused: boolean } | null {
+  const { $from } = editor.state.selection;
+  for (let d = $from.depth; d > 0; d--) {
+    const node = $from.node(d);
+    if (node.type.name === "listItem" || node.type.name === "taskItem") {
+      return { pos: $from.before(d), focused: node.attrs.focused === true };
+    }
+  }
+  return null;
+}
+
 function Toolbar({
   editor,
   onAddTasks,
+  onFocusLine,
   showTasks,
 }: {
   editor: Editor | null;
   onAddTasks: (lines: string[]) => void;
+  onFocusLine: (pos: number) => void;
   showTasks: boolean;
 }) {
   // In TipTap v3, useEditor does not re-render on every transaction. Derive the
   // active states reactively so highlights track the cursor (and clear when it
   // leaves formatted text) instead of getting stuck "on" after a command.
   // hasSelection drives the clock button (enabled only when text is selected).
+  // focusableLine drives the "Focus this line" button: its pos (for the click
+  // handler) and whether the cursor is already on the currently-focused line.
   const active = useEditorState({
     editor,
     selector: ({ editor }) =>
@@ -138,6 +157,7 @@ function Toolbar({
             ordered: editor.isActive("orderedList"),
             task: editor.isActive("taskList"),
             hasSelection: !editor.state.selection.empty,
+            focusableLine: findFocusableLine(editor),
           }
         : null,
   });
@@ -158,6 +178,15 @@ function Toolbar({
     const text = editor.state.doc.textBetween(from, to, "\n", "\n");
     const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
     if (lines.length > 0) onAddTasks(lines);
+  }
+
+  // Mark the bullet/checklist line the cursor is in as the timer's focus
+  // task — same semantics as dragging the line-handle onto the focus slot.
+  function focusCurrentLine() {
+    if (!editor) return;
+    const line = findFocusableLine(editor);
+    if (!line) return;
+    onFocusLine(line.pos);
   }
   return (
     <div className="toolbar">
@@ -235,6 +264,21 @@ function Toolbar({
         </Btn>
       </MenuBar>
 
+      <span className="toolbar__sep" />
+
+      <Btn
+        label="Focus this line"
+        active={!!active.focusableLine?.focused}
+        disabled={!active.focusableLine}
+        onClick={focusCurrentLine}
+      >
+        <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="9" cy="9" r="6.75" />
+          <circle cx="9" cy="9" r="1.2" fill="currentColor" stroke="none" />
+          <path d="M9 1v2.5M9 14.5V17M1 9h2.5M14.5 9H17" />
+        </svg>
+      </Btn>
+
       {showTasks && (
         <>
           <span className="toolbar__sep" />
@@ -257,7 +301,7 @@ function Toolbar({
 
 export const LINE_DRAG_MIME = "application/x-focusbox-line";
 
-export default function Notes({ doc, onChange, onAddTasks, onEditorReady, onLineDragChange, showTasks, focusDone }: Props) {
+export default function Notes({ doc, onChange, onAddTasks, onEditorReady, onLineDragChange, onFocusLine, showTasks, focusDone }: Props) {
   const editor = useEditor({
     extensions: [
       StarterKit,
@@ -333,7 +377,7 @@ export default function Notes({ doc, onChange, onAddTasks, onEditorReady, onLine
 
   return (
     <section className={`notes${focusDone ? " notes--focus-done" : ""}`}>
-      <Toolbar editor={editor} onAddTasks={onAddTasks} showTasks={showTasks} />
+      <Toolbar editor={editor} onAddTasks={onAddTasks} onFocusLine={onFocusLine} showTasks={showTasks} />
       <div
         className="notes__scroll"
         ref={scrollRef}
