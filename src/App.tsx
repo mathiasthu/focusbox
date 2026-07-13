@@ -175,18 +175,13 @@ export default function App() {
     }
   }
 
-  // Drop from the notepad drag-handle: mark that line as the focus task.
-  // The editor command mutates the doc, which flows back via onUpdate → updateNotes.
-  // If the dropped line was already done (struck / checked), also clear that done
-  // state so it becomes the ACTIVE focus task rather than an immediately-dead
-  // "done" card — the drop is a clear "focus on this" signal.
-  function handleFocusDrop(e: React.DragEvent) {
-    e.preventDefault();
-    setLineDragging(false);
-    const raw = e.dataTransfer.getData(LINE_DRAG_MIME);
-    if (!raw) return;
-    const pos = Number(raw);
-    if (!Number.isInteger(pos) || pos < 0) return;
+  // Core "focus this line" logic, shared by the drag-handle drop and the
+  // toolbar button. The editor command mutates the doc, which flows back via
+  // onUpdate → updateNotes. If the line was already done (struck / checked),
+  // also clear that done state so it becomes the ACTIVE focus task rather
+  // than an immediately-dead "done" card — both are a clear "focus on this"
+  // signal.
+  function focusLineAt(pos: number) {
     const editor = editorRef.current;
     if (!editor) return;
     editor.commands.setFocusedLineAt(pos);
@@ -195,6 +190,17 @@ export default function App() {
     if (cleared !== withFocus) {
       editor.commands.setContent(cleared, { emitUpdate: true });
     }
+  }
+
+  // Drop from the notepad drag-handle: mark that line as the focus task.
+  function handleFocusDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setLineDragging(false);
+    const raw = e.dataTransfer.getData(LINE_DRAG_MIME);
+    if (!raw) return;
+    const pos = Number(raw);
+    if (!Number.isInteger(pos) || pos < 0) return;
+    focusLineAt(pos);
   }
 
   // Card ✓/✕: write done into the note (strike/check), keep the card until reset.
@@ -300,6 +306,7 @@ export default function App() {
           onAddTasks={addTasksFromNotes}
           onEditorReady={(ed) => { editorRef.current = ed; }}
           onLineDragChange={setLineDragging}
+          onFocusLine={focusLineAt}
           showTasks={showTasks}
           focusDone={!!focusTask?.done}
         />
