@@ -1,4 +1,4 @@
-// The focus task under the timer. Active: text + done (✓) + dismiss-as-done (✕).
+// The focus task under the timer. Active: text + done (✓) + remove-without-done (✕).
 // Done: struck text, no buttons; stays until the timer is reset.
 import type { FocusedTask } from "../lib/focusedLine";
 
@@ -61,9 +61,9 @@ export default function FocusCard({ task, onDone, onDismiss }: Props) {
           <button
             type="button"
             className="focus-card__btn"
-            aria-label="Mark focus task done and dismiss"
-            title="Done"
-            onClick={onDone}
+            aria-label="Remove focus task without completing"
+            title="Remove"
+            onClick={onDismiss}
           >
             ✕
           </button>
