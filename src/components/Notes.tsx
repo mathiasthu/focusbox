@@ -13,6 +13,8 @@ interface Props {
   onAddTasks: (lines: string[]) => void;
   onEditorReady: (editor: Editor | null) => void;
   onLineDragChange: (dragging: boolean) => void;
+  showTasks: boolean;
+  focusDone: boolean;
 }
 
 function Btn({
@@ -112,9 +114,11 @@ function MenuBar({
 function Toolbar({
   editor,
   onAddTasks,
+  showTasks,
 }: {
   editor: Editor | null;
   onAddTasks: (lines: string[]) => void;
+  showTasks: boolean;
 }) {
   // In TipTap v3, useEditor does not re-render on every transaction. Derive the
   // active states reactively so highlights track the cursor (and clear when it
@@ -231,25 +235,29 @@ function Toolbar({
         </Btn>
       </MenuBar>
 
-      <span className="toolbar__sep" />
+      {showTasks && (
+        <>
+          <span className="toolbar__sep" />
 
-      <Btn
-        label="Add selected lines to tasks"
-        disabled={!active.hasSelection}
-        onClick={addSelectionAsTasks}
-      >
-        <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="9" cy="9" r="6.75" />
-          <path d="M9 5.2V9l2.6 1.6" />
-        </svg>
-      </Btn>
+          <Btn
+            label="Add selected lines to tasks"
+            disabled={!active.hasSelection}
+            onClick={addSelectionAsTasks}
+          >
+            <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="9" cy="9" r="6.75" />
+              <path d="M9 5.2V9l2.6 1.6" />
+            </svg>
+          </Btn>
+        </>
+      )}
     </div>
   );
 }
 
 export const LINE_DRAG_MIME = "application/x-focusbox-line";
 
-export default function Notes({ doc, onChange, onAddTasks, onEditorReady, onLineDragChange }: Props) {
+export default function Notes({ doc, onChange, onAddTasks, onEditorReady, onLineDragChange, showTasks, focusDone }: Props) {
   const editor = useEditor({
     extensions: [
       StarterKit,
@@ -324,8 +332,8 @@ export default function Notes({ doc, onChange, onAddTasks, onEditorReady, onLine
   }
 
   return (
-    <section className="notes">
-      <Toolbar editor={editor} onAddTasks={onAddTasks} />
+    <section className={`notes${focusDone ? " notes--focus-done" : ""}`}>
+      <Toolbar editor={editor} onAddTasks={onAddTasks} showTasks={showTasks} />
       <div
         className="notes__scroll"
         ref={scrollRef}

@@ -300,6 +300,8 @@ export default function App() {
           onAddTasks={addTasksFromNotes}
           onEditorReady={(ed) => { editorRef.current = ed; }}
           onLineDragChange={setLineDragging}
+          showTasks={showTasks}
+          focusDone={!!focusTask?.done}
         />
       </main>
 

@@ -1308,15 +1308,19 @@ body::after {
 
 /* --- focused notepad line --- */
 .notes__editor li[data-focused="true"] {
-  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
   border-radius: 6px;
-  box-shadow: inset 3px 0 0 var(--accent);
+  box-shadow: inset 4px 0 0 var(--accent);
+  padding-left: 4px;
 }
-/* done → drop the highlight (checked checklist item, or fully-struck bullet) */
-.notes__editor li[data-focused="true"][data-checked="true"],
-.notes__editor li[data-focused="true"]:has(s) {
+/* done → drop the highlight. State-driven via the .notes--focus-done wrapper
+   class (set from focusTask.done in App.tsx), not a `:has(s)` DOM heuristic —
+   that broke for partially-struck lines (any strike anywhere in the line hid
+   the highlight even while the line was still the active, non-done focus). */
+.notes--focus-done .notes__editor li[data-focused="true"] {
   background: none;
   box-shadow: none;
+  padding-left: 0;
 }
 
 /* --- drop slot + focus card under the timer --- */
@@ -1342,8 +1346,8 @@ body::after {
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
-  background: var(--accent-soft);
-  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg));
+  border-left: 4px solid var(--accent);
   border-radius: 10px;
 }
 .focus-card__body {
