@@ -1038,7 +1038,26 @@ body::after {
   flex: 1;
   overflow-y: auto;
   padding: 44px clamp(28px, 6%, 72px) 80px;
+  position: relative;
 }
+
+/* --- focus-line drag handle --- */
+.line-handle {
+  position: absolute;
+  left: 2px;
+  width: 18px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  opacity: 0.35;
+  font-size: 13px;
+  line-height: 22px;
+  cursor: grab;
+}
+.line-handle:hover { opacity: 0.8; }
+.line-handle:active { cursor: grabbing; }
 
 .notes__editor {
   max-width: 680px;
