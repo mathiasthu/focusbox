@@ -1038,7 +1038,26 @@ body::after {
   flex: 1;
   overflow-y: auto;
   padding: 44px clamp(28px, 6%, 72px) 80px;
+  position: relative;
 }
+
+/* --- focus-line drag handle --- */
+.line-handle {
+  position: absolute;
+  left: 2px;
+  width: 18px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  opacity: 0.35;
+  font-size: 13px;
+  line-height: 22px;
+  cursor: grab;
+}
+.line-handle:hover { opacity: 0.8; }
+.line-handle:active { cursor: grabbing; }
 
 .notes__editor {
   max-width: 680px;
@@ -1257,3 +1276,63 @@ body::after {
   color: var(--ink);
   background: var(--bg-2);
 }
+
+/* --- focused notepad line --- */
+.notes__editor li[data-focused="true"] {
+  background: var(--accent-soft);
+  border-radius: 6px;
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+/* done → drop the highlight (checked checklist item, or fully-struck bullet) */
+.notes__editor li[data-focused="true"][data-checked="true"],
+.notes__editor li[data-focused="true"]:has(s) {
+  background: none;
+  box-shadow: none;
+}
+
+/* --- drop slot + focus card under the timer --- */
+.focus-slot {
+  margin: 10px 0 4px;
+  border-radius: 10px;
+}
+.focus-slot--target {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.focus-slot__hint {
+  font-size: 12px;
+  color: var(--accent);
+  opacity: 0.9;
+}
+.focus-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--accent-soft);
+  border-radius: 10px;
+}
+.focus-card__text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+.focus-card--done .focus-card__text {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+.focus-card--done { background: none; box-shadow: inset 0 0 0 1px var(--accent-soft); }
+.focus-card__tag { font-size: 11px; opacity: 0.6; }
+.focus-card__actions { display: flex; gap: 4px; }
+.focus-card__btn {
+  width: 24px; height: 24px;
+  border: 0; border-radius: 7px;
+  background: none; color: var(--ink);
+  cursor: pointer; opacity: 0.7;
+}
+.focus-card__btn:hover { opacity: 1; background: var(--accent-soft); }
