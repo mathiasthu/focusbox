@@ -72,7 +72,7 @@ function device(over: Partial<LocalData> = {}): LocalData {
   return {
     tasks: [],
     notes: { doc: null, updated_at: 0 },
-    settings: { theme: "system", accent: "clay", spotifyEnabled: true, updated_at: 0 },
+    settings: { theme: "system", accent: "clay", spotifyEnabled: true, showTasks: true, updated_at: 0 },
     ...over,
   };
 }
@@ -120,8 +120,8 @@ describe("syncOnce orchestration", () => {
 
   it("settings follow last-write-wins", async () => {
     const server = new FakeServer();
-    let a = await run(server, device({ settings: { theme: "dark", accent: "forest", spotifyEnabled: false, updated_at: 10 } }), emptySyncState(), "A");
-    await run(server, device({ settings: { theme: "light", accent: "plum", spotifyEnabled: true, updated_at: 20 } }), emptySyncState(), "B");
+    let a = await run(server, device({ settings: { theme: "dark", accent: "forest", spotifyEnabled: false, showTasks: true, updated_at: 10 } }), emptySyncState(), "A");
+    await run(server, device({ settings: { theme: "light", accent: "plum", spotifyEnabled: true, showTasks: true, updated_at: 20 } }), emptySyncState(), "B");
     a = await run(server, a.local, a.state, "A");
     expect(a.local.settings.accent).toBe("plum"); // B's newer write wins
   });

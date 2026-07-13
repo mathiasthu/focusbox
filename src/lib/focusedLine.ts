@@ -36,18 +36,21 @@ function textNodes(n: Node): Node[] {
   return (n.content ?? []).flatMap(textNodes);
 }
 
+/** Whether a listItem/taskItem node currently reads as "done" (checked / all-struck). */
+function isDoneNode(n: Node): boolean {
+  const texts = textNodes(n);
+  return n.type === "taskItem"
+    ? n.attrs?.checked === true
+    : texts.length > 0 && texts.every((t) => (t.marks ?? []).some((m) => m.type === "strike"));
+}
+
 /** The current focus task derived from the doc, or null if none. */
 export function getFocusedTask(doc: NotesDoc): FocusedTask | null {
   if (!doc) return null;
   const node = findFocused(doc as Node);
   if (!node) return null;
   const texts = textNodes(node);
-  const done =
-    node.type === "taskItem"
-      ? node.attrs?.checked === true
-      : texts.length > 0 &&
-        texts.every((t) => (t.marks ?? []).some((m) => m.type === "strike"));
-  return { text: texts.map((t) => t.text ?? "").join(""), done };
+  return { text: texts.map((t) => t.text ?? "").join(""), done: isDoneNode(node) };
 }
 
 function mapNodes(n: Node, fn: (n: Node) => Node): Node {
@@ -90,5 +93,36 @@ export function markFocusedDone(doc: NotesDoc): NotesDoc {
       return { ...child, content: child.content.map(strike) };
     };
     return strike(n);
+  }) as NotesDoc;
+}
+
+/**
+ * Clear the DONE state of the focused line if it is currently done: uncheck a
+ * taskItem, or remove the strike mark from every text node of a bullet listItem
+ * (other marks kept). No-op (same reference) if the focused line isn't done, or
+ * nothing is focused. Used when a note line is dropped onto the focus slot so an
+ * already-done line becomes the active focus task instead of a dead "done" card.
+ */
+export function clearDone(doc: NotesDoc): NotesDoc {
+  if (!doc) return doc;
+  const target = findFocused(doc as Node);
+  if (!target || !isDoneNode(target)) return doc;
+  return mapNodes(doc as Node, (n) => {
+    if (n !== target) return n;
+    if (n.type === "taskItem") return { ...n, attrs: { ...n.attrs, checked: false } };
+    // bullet listItem: drop the strike mark from every text node (keep other marks)
+    const unstrike = (child: Node): Node => {
+      if (child.type === "text") {
+        const marks = (child.marks ?? []).filter((m) => m.type !== "strike");
+        if (marks.length === (child.marks ?? []).length) return child;
+        const next: Node = { ...child };
+        if (marks.length > 0) next.marks = marks;
+        else delete next.marks;
+        return next;
+      }
+      if (!child.content) return child;
+      return { ...child, content: child.content.map(unstrike) };
+    };
+    return unstrike(n);
   }) as NotesDoc;
 }

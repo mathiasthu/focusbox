@@ -58,6 +58,7 @@ describe("mergeSettings (LWW)", () => {
     theme: "system",
     accent: "clay",
     spotifyEnabled: true,
+    showTasks: true,
     updated_at: 1,
     ...over,
   });

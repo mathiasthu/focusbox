@@ -56,6 +56,8 @@ interface Props {
   onAccentChange: (id: AccentId) => void;
   playerVisible: boolean;
   onPlayerVisibleChange: (visible: boolean) => void;
+  showTasks: boolean;
+  onShowTasksChange: (visible: boolean) => void;
   sync: SyncController;
   demo: boolean;
 }
@@ -69,6 +71,8 @@ export default function Settings({
   onAccentChange,
   playerVisible,
   onPlayerVisibleChange,
+  showTasks,
+  onShowTasksChange,
   sync,
   demo,
 }: Props) {
@@ -131,6 +135,28 @@ export default function Settings({
                 onClick={() => onAccentChange(a.id)}
               />
             ))}
+          </div>
+        </div>
+
+        <div className="setting">
+          <span className="setting__label">Show tasks</span>
+          <div className="segmented" role="group" aria-label="Show tasks">
+            <button
+              type="button"
+              className={`segmented__opt${showTasks ? " segmented__opt--active" : ""}`}
+              aria-pressed={showTasks}
+              onClick={() => onShowTasksChange(true)}
+            >
+              On
+            </button>
+            <button
+              type="button"
+              className={`segmented__opt${!showTasks ? " segmented__opt--active" : ""}`}
+              aria-pressed={!showTasks}
+              onClick={() => onShowTasksChange(false)}
+            >
+              Off
+            </button>
           </div>
         </div>
 

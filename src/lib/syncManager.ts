@@ -40,14 +40,14 @@ export type { ConflictMeta, ConflictContent };
 export interface LocalSnapshot {
   tasks: LocalData["tasks"];
   notesDoc: Record<string, unknown> | null;
-  settings: { theme: string; accent: string; spotifyEnabled: boolean };
+  settings: { theme: string; accent: string; spotifyEnabled: boolean; showTasks: boolean };
 }
 
 /** What the manager hands back after a merge for the app to apply. */
 export interface MergedSnapshot {
   tasks: LocalData["tasks"];
   notesDoc: Record<string, unknown> | null;
-  settings: { theme: string; accent: string; spotifyEnabled: boolean };
+  settings: { theme: string; accent: string; spotifyEnabled: boolean; showTasks: boolean };
 }
 
 export interface SyncSnapshot {
@@ -622,6 +622,7 @@ export class SyncManager {
             theme: res.local.settings.theme,
             accent: res.local.settings.accent,
             spotifyEnabled: res.local.settings.spotifyEnabled,
+            showTasks: res.local.settings.showTasks,
           },
     });
   }

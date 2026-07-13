@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { getFocusedTask, clearFocused, markFocusedDone } from "./focusedLine";
+import { getFocusedTask, clearFocused, markFocusedDone, clearDone } from "./focusedLine";
 
 const text = (t: string, marks?: unknown[]) =>
   marks ? { type: "text", text: t, marks } : { type: "text", text: t };
@@ -111,5 +111,52 @@ describe("markFocusedDone", () => {
     const d = doc({ type: "bulletList", content: [li(undefined, para(text("a")))] });
     expect(markFocusedDone(d)).toBe(d);
     expect(markFocusedDone(null)).toBeNull();
+  });
+});
+
+describe("clearDone", () => {
+  it("unchecks a focused done taskItem (keeps focused attr)", () => {
+    const d = doc({
+      type: "taskList",
+      content: [task({ checked: true, focused: true }, para(text("call bank")))],
+    });
+    const out = clearDone(d);
+    expect(getFocusedTask(out)).toEqual({ text: "call bank", done: false });
+  });
+
+  it("un-strikes every text node of a focused done bullet line (keeps other marks)", () => {
+    const d = doc({
+      type: "bulletList",
+      content: [
+        li(
+          { focused: true },
+          para(
+            text("write ", [{ type: "bold" }, { type: "strike" }]),
+            text("report", [{ type: "strike" }]),
+          ),
+        ),
+      ],
+    });
+    const out = clearDone(d);
+    expect(getFocusedTask(out)).toEqual({ text: "write report", done: false });
+    const item = (out as any).content[0].content[0];
+    const first = item.content[0].content[0];
+    expect(first.marks).toEqual([{ type: "bold" }]);
+    const second = item.content[0].content[1];
+    expect(second.marks).toBeUndefined();
+  });
+
+  it("no-ops (same reference) when the focused line is NOT done", () => {
+    const d = doc({
+      type: "bulletList",
+      content: [li({ focused: true }, para(text("write report")))],
+    });
+    expect(clearDone(d)).toBe(d);
+  });
+
+  it("no-ops (same reference) when nothing is focused / doc null", () => {
+    const d = doc({ type: "bulletList", content: [li(undefined, para(text("a")))] });
+    expect(clearDone(d)).toBe(d);
+    expect(clearDone(null)).toBeNull();
   });
 });
