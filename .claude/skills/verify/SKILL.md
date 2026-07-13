@@ -19,6 +19,17 @@ State persists in localStorage (`focusbox-state`), so reloads test persistence.
 
 ## Gotchas
 
+- **NordVPN blanks the app (recurring "app doesn't load" / white window).** NordVPN's
+  ad-block/tracker/URL-cleaning (Shield endpoint-security extension) hangs WKWebView
+  page loads for non-Apple (ad-hoc-signed) apps — Tauri dev AND release builds show a
+  blank white window; Safari/curl work fine, so it looks like a code bug. Diagnose:
+  minimal compiled WKWebView probe loading `http://localhost:<port>` times out while
+  `http://127.0.0.1:<port>` renders. Fix: quit NordVPN (`osascript -e 'tell application
+  "NordVPN" to quit'`) — instant recovery — or reboot if its system extension is
+  half-updated (`systemextensionsctl list` shows one "waiting to uninstall on reboot").
+  This, not zombie processes, was the 2026-07-13 root cause; check it FIRST when the
+  window opens but stays white.
+
 - **Launching the desktop app (`npm run tauri dev`): kill ALL zombies first.**
   The single-instance plugin makes any surviving Focusbox process (installed
   app, `target/release/bundle` binary, prior dev run) swallow the new launch —
