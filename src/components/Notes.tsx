@@ -3,7 +3,7 @@ import StarterKit from "@tiptap/starter-kit";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import Placeholder from "@tiptap/extension-placeholder";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { NotesDoc } from "../lib/store";
 import { FocusedLine } from "../lib/focusedLineExtension";
 
@@ -11,6 +11,8 @@ interface Props {
   doc: NotesDoc;
   onChange: (doc: NotesDoc) => void;
   onAddTasks: (lines: string[]) => void;
+  onEditorReady: (editor: Editor | null) => void;
+  onLineDragChange: (dragging: boolean) => void;
 }
 
 function Btn({
@@ -147,7 +149,9 @@ function Toolbar({
   );
 }
 
-export default function Notes({ doc, onChange, onAddTasks }: Props) {
+export const LINE_DRAG_MIME = "application/x-focusbox-line";
+
+export default function Notes({ doc, onChange, onAddTasks, onEditorReady, onLineDragChange }: Props) {
   const editor = useEditor({
     extensions: [
       StarterKit,
@@ -162,6 +166,9 @@ export default function Notes({ doc, onChange, onAddTasks }: Props) {
     content: doc ?? "",
     onUpdate: ({ editor }) => onChange(editor.getJSON() as NotesDoc),
   });
+  const [handleTop, setHandleTop] = useState<number | null>(null);
+  const hoveredLi = useRef<HTMLElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   // Apply an EXTERNAL doc change (e.g. notes pulled from another device by cloud
   // sync) into the editor. Skip while the editor is focused so we never clobber
@@ -176,11 +183,69 @@ export default function Notes({ doc, onChange, onAddTasks }: Props) {
     editor.commands.setContent(doc ?? "", { emitUpdate: false });
   }, [doc, editor]);
 
+  useEffect(() => {
+    onEditorReady(editor);
+    return () => onEditorReady(null);
+  }, [editor, onEditorReady]);
+
+  // Track which draggable line the pointer is over; position the handle beside it.
+  function onMouseMove(e: React.MouseEvent) {
+    const li = (e.target as HTMLElement).closest?.(
+      'ul[data-type="taskList"] > li, ul:not([data-type="taskList"]) > li',
+    ) as HTMLElement | null;
+    // Exclude ordered lists implicitly (selector matches ULs only).
+    if (li && scrollRef.current?.contains(li)) {
+      hoveredLi.current = li;
+      const box = li.getBoundingClientRect();
+      const host = scrollRef.current.getBoundingClientRect();
+      setHandleTop(box.top - host.top + scrollRef.current.scrollTop);
+    }
+  }
+  function onMouseLeave() {
+    hoveredLi.current = null;
+    setHandleTop(null);
+  }
+
+  function onHandleDragStart(e: React.DragEvent) {
+    const li = hoveredLi.current;
+    const view = editor?.view;
+    if (!li || !view) return;
+    // posAtDOM(li, 0) = position at the start of the li's content; the node
+    // itself starts one position earlier.
+    const pos = view.posAtDOM(li, 0) - 1;
+    e.dataTransfer.setData(LINE_DRAG_MIME, String(pos));
+    e.dataTransfer.effectAllowed = "copy";
+    onLineDragChange(true);
+  }
+  function onHandleDragEnd() {
+    onLineDragChange(false);
+  }
+
   return (
     <section className="notes">
       <Toolbar editor={editor} onAddTasks={onAddTasks} />
-      <div className="notes__scroll">
+      <div
+        className="notes__scroll"
+        ref={scrollRef}
+        onMouseMove={onMouseMove}
+        onMouseLeave={onMouseLeave}
+      >
         <EditorContent editor={editor} className="notes__editor" />
+        {handleTop !== null && (
+          <button
+            type="button"
+            className="line-handle"
+            style={{ top: handleTop }}
+            aria-label="Drag line to focus"
+            title="Drag under the timer to focus on this task"
+            draggable
+            onDragStart={onHandleDragStart}
+            onDragEnd={onHandleDragEnd}
+            onMouseDown={(e) => e.preventDefault()} // don't steal editor focus
+          >
+            ⠿
+          </button>
+        )}
       </div>
     </section>
   );
