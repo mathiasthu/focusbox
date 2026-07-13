@@ -26,6 +26,7 @@ export interface SettingsValue {
   theme: string;
   accent: string;
   spotifyEnabled: boolean;
+  showTasks: boolean;
   updated_at: Millis;
 }
 

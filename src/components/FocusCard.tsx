@@ -11,7 +11,29 @@ interface Props {
 export default function FocusCard({ task, onDone, onDismiss }: Props) {
   return (
     <div className={`focus-card${task.done ? " focus-card--done" : ""}`}>
-      <span className="focus-card__text">{task.text || "…"}</span>
+      <span className="focus-card__body">
+        <span className="focus-card__label">Focus</span>
+        {task.done ? (
+          <span className="focus-card__text">{task.text || "…"}</span>
+        ) : (
+          <span
+            className="focus-card__text focus-card__text--clickable"
+            role="button"
+            tabIndex={0}
+            aria-label="Mark focus task done"
+            title="Mark done"
+            onClick={onDone}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onDone();
+              }
+            }}
+          >
+            {task.text || "…"}
+          </span>
+        )}
+      </span>
       {task.done ? (
         <span className="focus-card__actions">
           <span className="focus-card__tag">done</span>

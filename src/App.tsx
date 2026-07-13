@@ -9,7 +9,7 @@ import SpotifyPlayer from "./components/SpotifyPlayer";
 import UpdateBanner from "./components/UpdateBanner";
 import { checkForUpdate, installUpdateAndRestart, type UpdateInfo } from "./lib/updater";
 import { loadState, saveState, type NotesDoc } from "./lib/store";
-import { getFocusedTask, clearFocused, markFocusedDone } from "./lib/focusedLine";
+import { getFocusedTask, clearFocused, markFocusedDone, clearDone } from "./lib/focusedLine";
 import type { SyncedTask } from "./lib/syncTypes";
 import { newTaskId, reconcileTasks, visibleTasks, type VisibleTask } from "./lib/taskMap";
 import { appendTaskLines } from "./lib/notesEdit";
@@ -27,6 +27,7 @@ import {
   type AccentId,
 } from "./lib/accent";
 import { getPlayerVisible, storePlayerVisible, isSpotifyAvailable } from "./lib/spotify";
+import { getShowTasks, storeShowTasks } from "./lib/tasksVisibility";
 import { isDemo } from "./lib/demo";
 
 export default function App() {
@@ -38,6 +39,7 @@ export default function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(getStoredMode);
   const [accent, setAccent] = useState<AccentId>(getStoredAccent);
   const [playerVisible, setPlayerVisible] = useState<boolean>(getPlayerVisible);
+  const [showTasks, setShowTasks] = useState<boolean>(getShowTasks);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateError, setUpdateError] = useState(false);
@@ -54,7 +56,7 @@ export default function App() {
     getLocal: () => ({
       tasks,
       notesDoc,
-      settings: { theme: themeMode, accent, spotifyEnabled: playerVisible },
+      settings: { theme: themeMode, accent, spotifyEnabled: playerVisible, showTasks },
     }),
     onMerged: (m) => {
       // Only touch state that actually changed, so a no-op sync (e.g. window focus)
@@ -71,6 +73,7 @@ export default function App() {
       if (m.settings.theme !== themeMode) setThemeMode(m.settings.theme as ThemeMode);
       if (m.settings.accent !== accent) setAccent(m.settings.accent as AccentId);
       if (m.settings.spotifyEnabled !== playerVisible) setPlayerVisible(m.settings.spotifyEnabled);
+      if (m.settings.showTasks !== showTasks) setShowTasks(m.settings.showTasks);
     },
   });
 
@@ -119,6 +122,11 @@ export default function App() {
   useEffect(() => {
     storePlayerVisible(playerVisible);
   }, [playerVisible]);
+
+  // Persist the "show tasks" preference.
+  useEffect(() => {
+    storeShowTasks(showTasks);
+  }, [showTasks]);
 
   // ---- task editing: reconcile the slim UI list into the canonical SyncedTask[] ----
   function updateTasks(next: VisibleTask[]) {
@@ -169,6 +177,9 @@ export default function App() {
 
   // Drop from the notepad drag-handle: mark that line as the focus task.
   // The editor command mutates the doc, which flows back via onUpdate → updateNotes.
+  // If the dropped line was already done (struck / checked), also clear that done
+  // state so it becomes the ACTIVE focus task rather than an immediately-dead
+  // "done" card — the drop is a clear "focus on this" signal.
   function handleFocusDrop(e: React.DragEvent) {
     e.preventDefault();
     setLineDragging(false);
@@ -176,7 +187,14 @@ export default function App() {
     if (!raw) return;
     const pos = Number(raw);
     if (!Number.isInteger(pos) || pos < 0) return;
-    editorRef.current?.commands.setFocusedLineAt(pos);
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.commands.setFocusedLineAt(pos);
+    const withFocus = editor.getJSON() as NotesDoc;
+    const cleared = clearDone(withFocus);
+    if (cleared !== withFocus) {
+      editor.commands.setContent(cleared, { emitUpdate: true });
+    }
   }
 
   // Card ✓/✕: write done into the note (strike/check), keep the card until reset.
@@ -207,6 +225,10 @@ export default function App() {
   }
   function changePlayerVisible(visible: boolean) {
     setPlayerVisible(visible);
+    sync.notifySettingsChanged(Date.now());
+  }
+  function changeShowTasks(visible: boolean) {
+    setShowTasks(visible);
     sync.notifySettingsChanged(Date.now());
   }
 
@@ -268,7 +290,7 @@ export default function App() {
             )}
           </div>
         )}
-        <TaskList tasks={visibleTasks(tasks)} onChange={updateTasks} />
+        {showTasks && <TaskList tasks={visibleTasks(tasks)} onChange={updateTasks} />}
         {isSpotifyAvailable && playerVisible && <SpotifyPlayer />}
       </aside>
       <main className="app__notes">
@@ -290,6 +312,8 @@ export default function App() {
         onAccentChange={changeAccent}
         playerVisible={playerVisible}
         onPlayerVisibleChange={changePlayerVisible}
+        showTasks={showTasks}
+        onShowTasksChange={changeShowTasks}
         sync={sync}
         demo={demo}
       />
