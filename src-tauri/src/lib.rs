@@ -27,6 +27,11 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_process::init());
 
+    // Window-state: desktop-only. Restores the last window position/size on
+    // launch and saves it as the window moves/resizes/closes.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
+
     // Auto-updater: desktop-only (check on launch, sign-verified, prompt-to-restart).
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
