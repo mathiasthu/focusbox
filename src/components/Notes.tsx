@@ -5,6 +5,7 @@ import TaskItem from "@tiptap/extension-task-item";
 import Placeholder from "@tiptap/extension-placeholder";
 import { useEffect, type ReactNode } from "react";
 import type { NotesDoc } from "../lib/store";
+import { FocusedLine } from "../lib/focusedLineExtension";
 
 interface Props {
   doc: NotesDoc;
@@ -152,6 +153,7 @@ export default function Notes({ doc, onChange, onAddTasks }: Props) {
       StarterKit,
       TaskList,
       TaskItem.configure({ nested: true }),
+      FocusedLine,
       Placeholder.configure({
         placeholder:
           "Start writing…  Use the bar above, or type “# ”, “- ”, “[ ] ” for instant formatting.",
