@@ -1034,6 +1034,35 @@ body::after {
   line-height: 1;
 }
 
+.tool-menu {
+  position: relative;
+}
+.tool-menu__trigger {
+  gap: 3px;
+  padding: 0 8px;
+}
+.tool-menu__caret {
+  flex-shrink: 0;
+  opacity: 0.6;
+  transition: transform 0.15s;
+}
+.tool-menu__trigger--open .tool-menu__caret {
+  transform: rotate(180deg);
+}
+.tool-menu__panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  gap: 3px;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+}
+
 .notes__scroll {
   flex: 1;
   overflow-y: auto;
