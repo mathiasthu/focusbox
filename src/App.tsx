@@ -262,7 +262,7 @@ export default function App() {
             onDrop={handleFocusDrop}
           >
             {focusTask ? (
-              <FocusCard task={focusTask} onDone={handleFocusDone} />
+              <FocusCard task={focusTask} onDone={handleFocusDone} onDismiss={handleTimerReset} />
             ) : (
               <span className="focus-slot__hint">drop here to focus</span>
             )}
