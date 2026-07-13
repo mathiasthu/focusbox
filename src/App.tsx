@@ -160,7 +160,10 @@ export default function App() {
       // otherwise the returned task lines would never render and the next
       // keystroke would overwrite them. Harmless no-op when nothing is focused.
       (document.activeElement as HTMLElement | null)?.blur();
-      updateNotes(appendTaskLines(notesDoc, unmarked));
+      // Compose with clearFocused: on a time's-up Reset this runs right after
+      // handleTimerReset in the same event, both reading the same stale notesDoc —
+      // without composing, this write would resurrect the cleared focused attr.
+      updateNotes(appendTaskLines(clearFocused(notesDoc), unmarked));
     }
   }
 
