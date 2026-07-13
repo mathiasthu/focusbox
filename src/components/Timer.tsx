@@ -34,9 +34,11 @@ interface Props {
   // state). Drives the reset flow: clear marked tasks, return unmarked ones to
   // the notepad. A plain mid-session reset does NOT fire this.
   onTimeUpReset?: () => void;
+  // Fired on EVERY user-initiated Reset click (mid-session or after time's up).
+  onReset?: () => void;
 }
 
-export default function Timer({ onTimeUpReset }: Props) {
+export default function Timer({ onTimeUpReset, onReset }: Props) {
   const [durationSec, setDurationSec] = useState(30 * 60);
   // Remaining time in milliseconds — drives both the readout and the ring.
   const [remainingMs, setRemainingMs] = useState(30 * 60 * 1000);
@@ -107,6 +109,7 @@ export default function Timer({ onTimeUpReset }: Props) {
     setRunning(false);
     setFinished(false);
     setRemainingMs(durationMs);
+    onReset?.();
     // Only the end-of-session reset triggers the task → notepad flow.
     if (wasFinished) onTimeUpReset?.();
   }
