@@ -5,14 +5,26 @@ import type { FocusedTask } from "../lib/focusedLine";
 interface Props {
   task: FocusedTask;
   onDone: () => void;
+  onDismiss: () => void;
 }
 
-export default function FocusCard({ task, onDone }: Props) {
+export default function FocusCard({ task, onDone, onDismiss }: Props) {
   return (
     <div className={`focus-card${task.done ? " focus-card--done" : ""}`}>
       <span className="focus-card__text">{task.text || "…"}</span>
       {task.done ? (
-        <span className="focus-card__tag">done</span>
+        <span className="focus-card__actions">
+          <span className="focus-card__tag">done</span>
+          <button
+            type="button"
+            className="focus-card__btn"
+            aria-label="Dismiss focus task"
+            title="Dismiss"
+            onClick={onDismiss}
+          >
+            ✕
+          </button>
+        </span>
       ) : (
         <span className="focus-card__actions">
           <button
