@@ -199,6 +199,10 @@ export default function Notes({ doc, onChange, onAddTasks, onEditorReady, onLine
       const box = li.getBoundingClientRect();
       const host = scrollRef.current.getBoundingClientRect();
       setHandleTop(box.top - host.top + scrollRef.current.scrollTop);
+    } else {
+      if ((e.target as HTMLElement).closest?.(".line-handle")) return;
+      hoveredLi.current = null;
+      setHandleTop(null);
     }
   }
   function onMouseLeave() {
@@ -229,6 +233,10 @@ export default function Notes({ doc, onChange, onAddTasks, onEditorReady, onLine
         ref={scrollRef}
         onMouseMove={onMouseMove}
         onMouseLeave={onMouseLeave}
+        onScroll={() => {
+          hoveredLi.current = null;
+          setHandleTop(null);
+        }}
       >
         <EditorContent editor={editor} className="notes__editor" />
         {handleTop !== null && (
