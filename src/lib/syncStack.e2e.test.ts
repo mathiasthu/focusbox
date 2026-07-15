@@ -19,7 +19,7 @@ function makeDevice(name: string, local?: Partial<LocalSnapshot>) {
   const state: LocalSnapshot = {
     tasks: [],
     notesDoc: null,
-    settings: { theme: "system", accent: "clay", spotifyEnabled: true, showTasks: true },
+    settings: { theme: "system", accent: "clay", spotifyEnabled: true, showTasks: true, menubarTimer: true },
     ...local,
   };
   const persist = { value: null as SyncPersist | null };

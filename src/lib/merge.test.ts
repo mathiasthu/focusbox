@@ -59,6 +59,7 @@ describe("mergeSettings (LWW)", () => {
     accent: "clay",
     spotifyEnabled: true,
     showTasks: true,
+    menubarTimer: true,
     updated_at: 1,
     ...over,
   });

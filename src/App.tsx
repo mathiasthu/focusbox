@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Editor } from "@tiptap/react";
 import Timer from "./components/Timer";
 import TaskList from "./components/TaskList";
@@ -28,6 +28,8 @@ import {
 } from "./lib/accent";
 import { getPlayerVisible, storePlayerVisible, isSpotifyAvailable } from "./lib/spotify";
 import { getShowTasks, storeShowTasks } from "./lib/tasksVisibility";
+import { getMenubarTimer, storeMenubarTimer } from "./lib/trayVisibility";
+import { initTray, setTrayTitle, destroyTray, trayTitleFor, isTrayAvailable } from "./lib/tray";
 import { isDemo } from "./lib/demo";
 
 export default function App() {
@@ -40,6 +42,9 @@ export default function App() {
   const [accent, setAccent] = useState<AccentId>(getStoredAccent);
   const [playerVisible, setPlayerVisible] = useState<boolean>(getPlayerVisible);
   const [showTasks, setShowTasks] = useState<boolean>(getShowTasks);
+  const [menubarTimer, setMenubarTimer] = useState<boolean>(getMenubarTimer);
+  // Latest tray display string, derived from Timer's onTick — null means "icon only".
+  const [trayText, setTrayText] = useState<string | null>(null);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateError, setUpdateError] = useState(false);
@@ -56,7 +61,7 @@ export default function App() {
     getLocal: () => ({
       tasks,
       notesDoc,
-      settings: { theme: themeMode, accent, spotifyEnabled: playerVisible, showTasks },
+      settings: { theme: themeMode, accent, spotifyEnabled: playerVisible, showTasks, menubarTimer },
     }),
     onMerged: (m) => {
       // Only touch state that actually changed, so a no-op sync (e.g. window focus)
@@ -74,6 +79,7 @@ export default function App() {
       if (m.settings.accent !== accent) setAccent(m.settings.accent as AccentId);
       if (m.settings.spotifyEnabled !== playerVisible) setPlayerVisible(m.settings.spotifyEnabled);
       if (m.settings.showTasks !== showTasks) setShowTasks(m.settings.showTasks);
+      if (m.settings.menubarTimer !== menubarTimer) setMenubarTimer(m.settings.menubarTimer);
     },
   });
 
@@ -127,6 +133,30 @@ export default function App() {
   useEffect(() => {
     storeShowTasks(showTasks);
   }, [showTasks]);
+
+  // Persist the "menubar timer" preference.
+  useEffect(() => {
+    storeMenubarTimer(menubarTimer);
+  }, [menubarTimer]);
+
+  // Create/destroy the macOS tray item as the setting is toggled (no-op off-mac/web).
+  useEffect(() => {
+    if (!isTrayAvailable || !menubarTimer) {
+      destroyTray();
+      return;
+    }
+    initTray();
+    return () => {
+      destroyTray();
+    };
+  }, [menubarTimer]);
+
+  // Push the latest tray title whenever it changes (setTrayTitle no-ops on unchanged
+  // text and off-mac/web, so this is cheap to call unconditionally).
+  useEffect(() => {
+    if (!isTrayAvailable || !menubarTimer) return;
+    setTrayTitle(trayText);
+  }, [menubarTimer, trayText]);
 
   // ---- task editing: reconcile the slim UI list into the canonical SyncedTask[] ----
   function updateTasks(next: VisibleTask[]) {
@@ -237,6 +267,17 @@ export default function App() {
     setShowTasks(visible);
     sync.notifySettingsChanged(Date.now());
   }
+  function changeMenubarTimer(visible: boolean) {
+    setMenubarTimer(visible);
+    sync.notifySettingsChanged(Date.now());
+  }
+
+  // Timer tick/status -> tray display string (running "mm:ss" / paused frozen /
+  // finished "0:00" / idle icon-only). Cheap to call every tick; setTrayTitle itself
+  // no-ops on unchanged text and off-mac/web.
+  const handleTimerTick = useCallback((remainingMs: number, status: string) => {
+    setTrayText(trayTitleFor(status, remainingMs));
+  }, []);
 
   // Download + install the update, then relaunch. On Windows the installer closes the
   // app to apply, so only run this once the user has chosen to restart.
@@ -279,7 +320,7 @@ export default function App() {
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
         </button>
-        <Timer onTimeUpReset={handleTimeUpReset} onReset={handleTimerReset} />
+        <Timer onTimeUpReset={handleTimeUpReset} onReset={handleTimerReset} onTick={handleTimerTick} />
         {(lineDragging || focusTask) && (
           <div
             className={`focus-slot${lineDragging ? " focus-slot--target" : ""}`}
@@ -323,6 +364,8 @@ export default function App() {
         onPlayerVisibleChange={changePlayerVisible}
         showTasks={showTasks}
         onShowTasksChange={changeShowTasks}
+        menubarTimer={menubarTimer}
+        onMenubarTimerChange={changeMenubarTimer}
         sync={sync}
         demo={demo}
       />

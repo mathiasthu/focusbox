@@ -36,9 +36,14 @@ interface Props {
   onTimeUpReset?: () => void;
   // Fired on EVERY user-initiated Reset click (mid-session or after time's up).
   onReset?: () => void;
+  // Thin hook for the menubar tray: fired once per running tick (via the same
+  // rAF loop) and on every status change (start/pause/reset/finish). Callers
+  // derive their own display string from (remainingMs, status) — the timer
+  // itself stays unaware of the tray.
+  onTick?: (remainingMs: number, status: string) => void;
 }
 
-export default function Timer({ onTimeUpReset, onReset }: Props) {
+export default function Timer({ onTimeUpReset, onReset, onTick }: Props) {
   const [durationSec, setDurationSec] = useState(30 * 60);
   // Remaining time in milliseconds — drives both the readout and the ring.
   const [remainingMs, setRemainingMs] = useState(30 * 60 * 1000);
@@ -81,6 +86,11 @@ export default function Timer({ onTimeUpReset, onReset }: Props) {
       : remainingMs !== durationMs
         ? "paused"
         : "set timer";
+
+  // Report every tick + status change to the caller (menubar tray display).
+  useEffect(() => {
+    onTick?.(remainingMs, status);
+  }, [remainingMs, status, onTick]);
 
   function setDuration(sec: number) {
     const safe = Math.max(0, sec);
