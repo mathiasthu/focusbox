@@ -20,6 +20,7 @@ const TRAY_ID = "focusbox-timer";
 // (A bare "icons/tray.png" path string would be resolved by the Rust side
 // against the process cwd, which doesn't contain it in a production bundle.)
 import trayIconUrl from "../assets/tray.png";
+import { APP_VERSION } from "./config";
 
 function formatMmSs(totalSec: number): string {
   const s = Math.max(0, totalSec);
@@ -67,22 +68,45 @@ export async function initTray(): Promise<void> {
     }
     const { Image } = await import("@tauri-apps/api/image");
     const bytes = new Uint8Array(await (await fetch(trayIconUrl)).arrayBuffer());
+    // Shared by the left-click action and the "Show Focusbox" menu item.
+    async function focusMainWindow(): Promise<void> {
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        const win = getCurrentWindow();
+        await win.unminimize();
+        await win.show();
+        await win.setFocus();
+      } catch (err) {
+        console.error("Focusbox: tray click focus failed", err);
+      }
+    }
+    const { Menu, MenuItem, PredefinedMenuItem } = await import("@tauri-apps/api/menu");
+    const menu = await Menu.new({
+      items: [
+        await MenuItem.new({ text: `Focusbox v${APP_VERSION}`, enabled: false }),
+        await MenuItem.new({ text: "Show Focusbox", action: focusMainWindow }),
+        await PredefinedMenuItem.new({ item: "Separator" }),
+        await MenuItem.new({
+          text: "Quit",
+          action: async () => {
+            const { exit } = await import("@tauri-apps/plugin-process");
+            await exit(0);
+          },
+        }),
+      ],
+    });
     trayHandle = await TrayIcon.new({
       id: TRAY_ID,
       icon: await Image.fromBytes(bytes),
       iconAsTemplate: true,
       title: "",
+      menu,
+      // Right-click opens the menu; left-click keeps firing `action` below.
+      showMenuOnLeftClick: false,
       action: async (event) => {
         if (event.type !== "Click") return;
-        try {
-          const { getCurrentWindow } = await import("@tauri-apps/api/window");
-          const win = getCurrentWindow();
-          await win.unminimize();
-          await win.show();
-          await win.setFocus();
-        } catch (err) {
-          console.error("Focusbox: tray click focus failed", err);
-        }
+        if ((event as { button?: string }).button !== "Left") return;
+        await focusMainWindow();
       },
     });
     lastTitle = "";
