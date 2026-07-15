@@ -16,6 +16,11 @@ export const isTrayAvailable = isTauri && isMac;
 
 const TRAY_ID = "focusbox-timer";
 
+// Bundled by Vite; fetched at runtime and passed to the tray as raw PNG bytes.
+// (A bare "icons/tray.png" path string would be resolved by the Rust side
+// against the process cwd, which doesn't contain it in a production bundle.)
+import trayIconUrl from "../assets/tray.png";
+
 function formatMmSs(totalSec: number): string {
   const s = Math.max(0, totalSec);
   const h = Math.floor(s / 3600);
@@ -60,9 +65,11 @@ export async function initTray(): Promise<void> {
       lastTitle = "";
       return;
     }
+    const { Image } = await import("@tauri-apps/api/image");
+    const bytes = new Uint8Array(await (await fetch(trayIconUrl)).arrayBuffer());
     trayHandle = await TrayIcon.new({
       id: TRAY_ID,
-      icon: "icons/tray.png",
+      icon: await Image.fromBytes(bytes),
       iconAsTemplate: true,
       title: "",
       action: async (event) => {
