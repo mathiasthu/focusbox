@@ -20,6 +20,9 @@
     },
     "updater:default",
     "process:default",
-    "window-state:default"
+    "window-state:default",
+    "core:window:allow-show",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus"
   ]
 }

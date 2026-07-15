@@ -27,6 +27,7 @@ export interface SettingsValue {
   accent: string;
   spotifyEnabled: boolean;
   showTasks: boolean;
+  menubarTimer: boolean;
   updated_at: Millis;
 }
 

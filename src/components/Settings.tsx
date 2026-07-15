@@ -3,6 +3,7 @@ import type { ThemeMode } from "../lib/theme";
 import { ACCENTS, type AccentId } from "../lib/accent";
 import { SUPPORT_URL, SUPPORT_EMAIL, APP_VERSION } from "../lib/config";
 import { isSpotifyAvailable } from "../lib/spotify";
+import { isTrayAvailable } from "../lib/tray";
 import AccountSync from "./AccountSync";
 import type { SyncController } from "../hooks/useSync";
 
@@ -58,6 +59,8 @@ interface Props {
   onPlayerVisibleChange: (visible: boolean) => void;
   showTasks: boolean;
   onShowTasksChange: (visible: boolean) => void;
+  menubarTimer: boolean;
+  onMenubarTimerChange: (visible: boolean) => void;
   sync: SyncController;
   demo: boolean;
 }
@@ -73,6 +76,8 @@ export default function Settings({
   onPlayerVisibleChange,
   showTasks,
   onShowTasksChange,
+  menubarTimer,
+  onMenubarTimerChange,
   sync,
   demo,
 }: Props) {
@@ -159,6 +164,30 @@ export default function Settings({
             </button>
           </div>
         </div>
+
+        {isTrayAvailable && (
+          <div className="setting">
+            <span className="setting__label">Menubar timer</span>
+            <div className="segmented" role="group" aria-label="Menubar timer">
+              <button
+                type="button"
+                className={`segmented__opt${menubarTimer ? " segmented__opt--active" : ""}`}
+                aria-pressed={menubarTimer}
+                onClick={() => onMenubarTimerChange(true)}
+              >
+                On
+              </button>
+              <button
+                type="button"
+                className={`segmented__opt${!menubarTimer ? " segmented__opt--active" : ""}`}
+                aria-pressed={!menubarTimer}
+                onClick={() => onMenubarTimerChange(false)}
+              >
+                Off
+              </button>
+            </div>
+          </div>
+        )}
 
         {isSpotifyAvailable && (
           <div className="setting">
