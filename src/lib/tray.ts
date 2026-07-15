@@ -97,7 +97,9 @@ export async function setTrayTitle(text: string | null): Promise<void> {
   const next = text ?? "";
   if (next === lastTitle) return;
   try {
-    await (trayHandle as { setTitle: (t: string | null) => Promise<void> }).setTitle(text);
+    // Always send a string: `setTitle(null)` has proven unreliable for clearing
+    // the title on macOS, while an empty string reliably renders icon-only.
+    await (trayHandle as { setTitle: (t: string | null) => Promise<void> }).setTitle(next);
     lastTitle = next;
   } catch (err) {
     console.error("Focusbox: tray setTitle failed", err);
