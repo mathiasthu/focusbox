@@ -215,17 +215,21 @@ export default function App() {
     const editor = editorRef.current;
     if (!editor) return;
     editor.commands.setFocusedLineAt(pos);
-    // Marking a focus task is a terminal action on that line — collapse any
-    // text selection and drop editor focus so the blue selection doesn't
-    // linger until the user clicks elsewhere.
-    editor.commands.setTextSelection(editor.state.selection.from);
-    editor.commands.blur();
-    window.getSelection()?.removeAllRanges();
     const withFocus = editor.getJSON() as NotesDoc;
     const cleared = clearDone(withFocus);
     if (cleared !== withFocus) {
       editor.commands.setContent(cleared, { emitUpdate: true });
     }
+    // Marking a focus task is a terminal action on that line — collapse any
+    // text selection and drop editor focus so the blue macOS selection doesn't
+    // linger until the user clicks elsewhere. Deferred a frame: the setContent
+    // above (and the toolbar button's own focus-preserving mousedown handling)
+    // would otherwise restore the selection right after we clear it.
+    requestAnimationFrame(() => {
+      editor.commands.setTextSelection(editor.state.selection.from);
+      editor.commands.blur();
+      window.getSelection()?.removeAllRanges();
+    });
   }
 
   // Drop from the notepad drag-handle: mark that line as the focus task.
