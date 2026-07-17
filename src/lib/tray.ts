@@ -56,7 +56,21 @@ export function trayTitleFor(status: string, remainingMs: number): string | null
 let lastTitle = "";
 let trayHandle: unknown = null;
 
-export async function initTray(): Promise<void> {
+// React effects fire initTray/destroyTray without awaiting them (a Settings
+// toggle off→on runs both back-to-back), so serialize every tray operation —
+// otherwise a still-in-flight destroy can remove the tray a concurrent init
+// just adopted, leaving no menubar item.
+let opChain: Promise<void> = Promise.resolve();
+function enqueue(op: () => Promise<void>): Promise<void> {
+  opChain = opChain.then(op, op);
+  return opChain;
+}
+
+export function initTray(): Promise<void> {
+  return enqueue(initTrayNow);
+}
+
+async function initTrayNow(): Promise<void> {
   if (!isTrayAvailable) return;
   try {
     const { TrayIcon } = await import("@tauri-apps/api/tray");
@@ -130,7 +144,11 @@ export async function setTrayTitle(text: string | null): Promise<void> {
   }
 }
 
-export async function destroyTray(): Promise<void> {
+export function destroyTray(): Promise<void> {
+  return enqueue(destroyTrayNow);
+}
+
+async function destroyTrayNow(): Promise<void> {
   if (!isTrayAvailable) return;
   try {
     const { TrayIcon } = await import("@tauri-apps/api/tray");
