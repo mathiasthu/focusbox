@@ -121,9 +121,9 @@ describe("syncOnce orchestration", () => {
   it("settings follow last-write-wins", async () => {
     const server = new FakeServer();
     let a = await run(server, device({ settings: { theme: "dark", accent: "forest", spotifyEnabled: false, showTasks: true, menubarTimer: true, updated_at: 10 } }), emptySyncState(), "A");
-    await run(server, device({ settings: { theme: "light", accent: "plum", spotifyEnabled: true, showTasks: true, menubarTimer: true, updated_at: 20 } }), emptySyncState(), "B");
+    await run(server, device({ settings: { theme: "light", accent: "red", spotifyEnabled: true, showTasks: true, menubarTimer: true, updated_at: 20 } }), emptySyncState(), "B");
     a = await run(server, a.local, a.state, "A");
-    expect(a.local.settings.accent).toBe("plum"); // B's newer write wins
+    expect(a.local.settings.accent).toBe("red"); // B's newer write wins
   });
 
   it("creates a notes conflict-copy when both devices diverge", async () => {
