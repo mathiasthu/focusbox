@@ -56,10 +56,10 @@
    per accent. (data-accent="clay" matches nothing here → falls through to the
    defaults above.) */
 :root[data-accent="red"] {
-  --accent: #a83c32;
-  --accent-deep: #8e3129;
-  --accent-soft: rgba(168, 60, 50, 0.14);
-  --on-accent: #fbf4f2;
+  --accent: #ab2735;
+  --accent-deep: #8f1f2b;
+  --accent-soft: rgba(171, 39, 53, 0.14);
+  --on-accent: #fbf3f4;
 }
 :root[data-accent="blue"] {
   --accent: #4a6d99;
@@ -92,10 +92,10 @@
   --on-accent: #f6f7f8;
 }
 :root[data-theme="dark"][data-accent="red"] {
-  --accent: #d98275;
-  --accent-deep: #c26b5e;
-  --accent-soft: rgba(217, 130, 117, 0.16);
-  --on-accent: #1c0e0b;
+  --accent: #e06c78;
+  --accent-deep: #c85562;
+  --accent-soft: rgba(224, 108, 120, 0.16);
+  --on-accent: #1c0a0d;
 }
 :root[data-theme="dark"][data-accent="blue"] {
   --accent: #82a6d0;

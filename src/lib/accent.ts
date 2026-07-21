@@ -20,7 +20,7 @@ export interface AccentOption {
 
 export const ACCENTS: AccentOption[] = [
   { id: "clay", label: "Clay", swatch: "#bf5a2f" },
-  { id: "red", label: "Brick", swatch: "#a83c32" },
+  { id: "red", label: "Crimson", swatch: "#ab2735" },
   { id: "blue", label: "Slate", swatch: "#4a6d99" },
   { id: "teal", label: "Teal", swatch: "#3f7d78" },
   { id: "gold", label: "Ochre", swatch: "#96721f" },
