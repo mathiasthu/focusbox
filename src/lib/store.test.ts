@@ -54,7 +54,7 @@ describe("appearance prefs in demo mode", () => {
   it("storeMode/storeAccent/storePlayerVisible write nothing in demo", () => {
     const spy = vi.spyOn(Storage.prototype, "setItem");
     storeMode("dark");
-    storeAccent("plum");
+    storeAccent("red");
     storePlayerVisible(false);
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
@@ -62,7 +62,7 @@ describe("appearance prefs in demo mode", () => {
 
   it("getters return defaults in demo (ignore any pre-existing values)", () => {
     localStorage.setItem("focusbox-theme", "dark");
-    localStorage.setItem("focusbox-accent", "plum");
+    localStorage.setItem("focusbox-accent", "red");
     localStorage.setItem("focusbox-player", "0");
     expect(getStoredMode()).toBe("system");
     expect(getStoredAccent()).toBe("clay");
