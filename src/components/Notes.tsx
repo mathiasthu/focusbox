@@ -4,8 +4,10 @@ import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import Placeholder from "@tiptap/extension-placeholder";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { ChainedCommands } from "@tiptap/core";
 import type { NotesDoc } from "../lib/store";
 import { FocusedLine } from "../lib/focusedLineExtension";
+import type { ToolbarItemId } from "../lib/toolbarPins";
 
 interface Props {
   doc: NotesDoc;
@@ -126,6 +128,80 @@ function findFocusableLine(editor: Editor): { pos: number; focused: boolean } | 
   return null;
 }
 
+// The reactive per-item active flags Toolbar derives via useEditorState.
+interface ActiveState {
+  h1: boolean;
+  h2: boolean;
+  bold: boolean;
+  italic: boolean;
+  strike: boolean;
+  bullet: boolean;
+  ordered: boolean;
+  task: boolean;
+  hasSelection: boolean;
+  focusableLine: { pos: number; focused: boolean } | null;
+}
+
+type MenuId = "heading" | "style" | "list";
+
+interface ToolbarItemDef {
+  id: ToolbarItemId;
+  menu: MenuId;
+  label: string;
+  icon: ReactNode;
+  isActive: (a: ActiveState) => boolean;
+  run: (c: ChainedCommands) => ChainedCommands;
+}
+
+const bulletIcon = (
+  <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+    <circle cx="3" cy="4.5" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="3" cy="9" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="3" cy="13.5" r="1.1" fill="currentColor" stroke="none" />
+    <path d="M7 4.5h8M7 9h8M7 13.5h8" />
+  </svg>
+);
+
+// Single source for the formatting tools: the dropdowns render the un-pinned
+// subset, the pinned row renders the pinned subset.
+const TOOLBAR_ITEMS: ToolbarItemDef[] = [
+  { id: "h1", menu: "heading", label: "Heading 1", icon: <span className="tool__txt">H1</span>, isActive: (a) => a.h1, run: (c) => c.toggleHeading({ level: 1 }) },
+  { id: "h2", menu: "heading", label: "Heading 2", icon: <span className="tool__txt">H2</span>, isActive: (a) => a.h2, run: (c) => c.toggleHeading({ level: 2 }) },
+  { id: "bold", menu: "style", label: "Bold", icon: <span className="tool__txt" style={{ fontWeight: 700 }}>B</span>, isActive: (a) => a.bold, run: (c) => c.toggleBold() },
+  { id: "italic", menu: "style", label: "Italic", icon: <span className="tool__txt" style={{ fontStyle: "italic", fontFamily: "Fraunces, serif" }}>I</span>, isActive: (a) => a.italic, run: (c) => c.toggleItalic() },
+  { id: "strike", menu: "style", label: "Strikethrough", icon: <span className="tool__txt" style={{ textDecoration: "line-through" }}>S</span>, isActive: (a) => a.strike, run: (c) => c.toggleStrike() },
+  { id: "bullet", menu: "list", label: "Bullet list", icon: bulletIcon, isActive: (a) => a.bullet, run: (c) => c.toggleBulletList() },
+  {
+    id: "ordered", menu: "list", label: "Numbered list",
+    icon: (
+      <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M8 4.5h7M8 9h7M8 13.5h7" />
+        <path d="M2 3.2h1.2v3M1.7 13.9h1.6M1.7 11.6c0-.6 1.5-.6 1.5.2 0 .5-1.5 1-1.5 2.1" stroke="currentColor" />
+      </svg>
+    ),
+    isActive: (a) => a.ordered, run: (c) => c.toggleOrderedList(),
+  },
+  {
+    id: "task", menu: "list", label: "Checklist",
+    icon: (
+      <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="1.5" y="2" width="6" height="6" rx="1.4" />
+        <path d="M2.8 5l1.3 1.3 2-2.4" />
+        <path d="M10.5 5h5.5M10.5 12.5h5.5" />
+        <rect x="1.5" y="9.5" width="6" height="6" rx="1.4" />
+      </svg>
+    ),
+    isActive: (a) => a.task, run: (c) => c.toggleTaskList(),
+  },
+];
+
+// The three dropdown groups, in display order. Trigger visuals unchanged.
+const MENUS: { id: MenuId; label: string; trigger: ReactNode }[] = [
+  { id: "heading", label: "Heading", trigger: <span className="tool__txt">H</span> },
+  { id: "style", label: "Style", trigger: <span className="tool__txt" style={{ fontStyle: "italic", fontFamily: "Fraunces, serif" }}>Aa</span> },
+  { id: "list", label: "List", trigger: bulletIcon },
+];
+
 function Toolbar({
   editor,
   onAddTasks,
@@ -162,7 +238,7 @@ function Toolbar({
         : null,
   });
 
-  const [openMenu, setOpenMenu] = useState<"heading" | "style" | "list" | null>(null);
+  const [openMenu, setOpenMenu] = useState<MenuId | null>(null);
 
   if (!editor || !active) return <div className="toolbar" />;
   const chain = () => editor.chain().focus();
@@ -190,79 +266,35 @@ function Toolbar({
   }
   return (
     <div className="toolbar">
-      <MenuBar
-        label="Heading"
-        trigger={<span className="tool__txt">H</span>}
-        active={active.h1 || active.h2}
-        open={openMenu === "heading"}
-        onToggle={() => setOpenMenu((m) => (m === "heading" ? null : "heading"))}
-        onClose={closeMenu}
-      >
-        <Btn label="Heading 1" active={active.h1} onClick={() => { chain().toggleHeading({ level: 1 }).run(); closeMenu(); }}>
-          <span className="tool__txt">H1</span>
-        </Btn>
-        <Btn label="Heading 2" active={active.h2} onClick={() => { chain().toggleHeading({ level: 2 }).run(); closeMenu(); }}>
-          <span className="tool__txt">H2</span>
-        </Btn>
-      </MenuBar>
-
-      <MenuBar
-        label="Style"
-        trigger={<span className="tool__txt" style={{ fontStyle: "italic", fontFamily: "Fraunces, serif" }}>Aa</span>}
-        active={active.bold || active.italic || active.strike}
-        open={openMenu === "style"}
-        onToggle={() => setOpenMenu((m) => (m === "style" ? null : "style"))}
-        onClose={closeMenu}
-      >
-        <Btn label="Bold" active={active.bold} onClick={() => { chain().toggleBold().run(); closeMenu(); }}>
-          <span className="tool__txt" style={{ fontWeight: 700 }}>B</span>
-        </Btn>
-        <Btn label="Italic" active={active.italic} onClick={() => { chain().toggleItalic().run(); closeMenu(); }}>
-          <span className="tool__txt" style={{ fontStyle: "italic", fontFamily: "Fraunces, serif" }}>I</span>
-        </Btn>
-        <Btn label="Strikethrough" active={active.strike} onClick={() => { chain().toggleStrike().run(); closeMenu(); }}>
-          <span className="tool__txt" style={{ textDecoration: "line-through" }}>S</span>
-        </Btn>
-      </MenuBar>
-
-      <MenuBar
-        label="List"
-        trigger={
-          <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-            <circle cx="3" cy="4.5" r="1.1" fill="currentColor" stroke="none" />
-            <circle cx="3" cy="9" r="1.1" fill="currentColor" stroke="none" />
-            <circle cx="3" cy="13.5" r="1.1" fill="currentColor" stroke="none" />
-            <path d="M7 4.5h8M7 9h8M7 13.5h8" />
-          </svg>
-        }
-        active={active.bullet || active.ordered || active.task}
-        open={openMenu === "list"}
-        onToggle={() => setOpenMenu((m) => (m === "list" ? null : "list"))}
-        onClose={closeMenu}
-      >
-        <Btn label="Bullet list" active={active.bullet} onClick={() => { chain().toggleBulletList().run(); closeMenu(); }}>
-          <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-            <circle cx="3" cy="4.5" r="1.1" fill="currentColor" stroke="none" />
-            <circle cx="3" cy="9" r="1.1" fill="currentColor" stroke="none" />
-            <circle cx="3" cy="13.5" r="1.1" fill="currentColor" stroke="none" />
-            <path d="M7 4.5h8M7 9h8M7 13.5h8" />
-          </svg>
-        </Btn>
-        <Btn label="Numbered list" active={active.ordered} onClick={() => { chain().toggleOrderedList().run(); closeMenu(); }}>
-          <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M8 4.5h7M8 9h7M8 13.5h7" />
-            <path d="M2 3.2h1.2v3M1.7 13.9h1.6M1.7 11.6c0-.6 1.5-.6 1.5.2 0 .5-1.5 1-1.5 2.1" stroke="currentColor" />
-          </svg>
-        </Btn>
-        <Btn label="Checklist" active={active.task} onClick={() => { chain().toggleTaskList().run(); closeMenu(); }}>
-          <svg width="17" height="17" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="1.5" y="2" width="6" height="6" rx="1.4" />
-            <path d="M2.8 5l1.3 1.3 2-2.4" />
-            <path d="M10.5 5h5.5M10.5 12.5h5.5" />
-            <rect x="1.5" y="9.5" width="6" height="6" rx="1.4" />
-          </svg>
-        </Btn>
-      </MenuBar>
+      {MENUS.map((menu) => {
+        const items = TOOLBAR_ITEMS.filter((i) => i.menu === menu.id);
+        if (items.length === 0) return null;
+        return (
+          <MenuBar
+            key={menu.id}
+            label={menu.label}
+            trigger={menu.trigger}
+            active={items.some((i) => i.isActive(active))}
+            open={openMenu === menu.id}
+            onToggle={() => setOpenMenu((m) => (m === menu.id ? null : menu.id))}
+            onClose={closeMenu}
+          >
+            {items.map((item) => (
+              <Btn
+                key={item.id}
+                label={item.label}
+                active={item.isActive(active)}
+                onClick={() => {
+                  item.run(chain()).run();
+                  closeMenu();
+                }}
+              >
+                {item.icon}
+              </Btn>
+            ))}
+          </MenuBar>
+        );
+      })}
 
       <span className="toolbar__sep" />
 
