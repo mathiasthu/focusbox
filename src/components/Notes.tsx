@@ -77,6 +77,7 @@ function MenuBar({
   open,
   onToggle,
   onClose,
+  onUnpinDrop,
   children,
 }: {
   label: string;
@@ -85,6 +86,7 @@ function MenuBar({
   open: boolean;
   onToggle: () => void;
   onClose: () => void;
+  onUnpinDrop?: (id: string) => void;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -105,8 +107,23 @@ function MenuBar({
     };
   }, [open, onClose]);
 
+  function onDragOver(e: DragEvent) {
+    if (!onUnpinDrop) return;
+    if (!e.dataTransfer.types.includes(TOOLPIN_MIME)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }
+  function onDrop(e: DragEvent) {
+    if (!onUnpinDrop) return;
+    const payload = e.dataTransfer.getData(TOOLPIN_MIME);
+    if (!payload.startsWith("pinned:")) return; // a menu item dropped on a menu — ignore
+    e.preventDefault();
+    e.stopPropagation(); // handled here — don't let the toolbar's drop handler see it too
+    onUnpinDrop(payload.slice("pinned:".length));
+  }
+
   return (
-    <div className="tool-menu" ref={ref}>
+    <div className="tool-menu" ref={ref} onDragOver={onDragOver} onDrop={onDrop}>
       <button
         type="button"
         className={`tool tool-menu__trigger${active ? " tool--active" : ""}${open ? " tool-menu__trigger--open" : ""}`}
@@ -297,6 +314,10 @@ function Toolbar({
     });
   }
 
+  function unpinItem(id: ToolbarItemId) {
+    setPinned((prev) => prev.filter((p) => p !== id));
+  }
+
   function onToolbarDragOver(e: DragEvent) {
     if (!e.dataTransfer.types.includes(TOOLPIN_MIME)) return;
     e.preventDefault(); // accept the drop (also for pinned:* — keeps dropEffect "move" so dragEnd won't unpin)
@@ -342,6 +363,9 @@ function Toolbar({
             open={openMenu === menu.id}
             onToggle={() => setOpenMenu((m) => (m === menu.id ? null : menu.id))}
             onClose={closeMenu}
+            onUnpinDrop={(id) => {
+              if (TOOLBAR_ITEMS.some((i) => i.id === id)) unpinItem(id as ToolbarItemId);
+            }}
           >
             {items.map((item) => (
               <Btn
@@ -406,8 +430,16 @@ function Toolbar({
             return (
               <Btn
                 key={item.id}
-                label={item.label}
+                label={`${item.label} (drag away to unpin)`}
                 active={item.isActive(active)}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData(TOOLPIN_MIME, `pinned:${item.id}`);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragEnd={(e) => {
+                  if (e.dataTransfer.dropEffect === "none") unpinItem(item.id);
+                }}
                 onClick={() => item.run(chain()).run()}
               >
                 {item.icon}
