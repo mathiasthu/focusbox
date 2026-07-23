@@ -7,7 +7,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ChainedCommands } from "@tiptap/core";
 import type { NotesDoc } from "../lib/store";
 import { FocusedLine } from "../lib/focusedLineExtension";
-import type { ToolbarItemId } from "../lib/toolbarPins";
+import { getPinned, storePinned, type ToolbarItemId } from "../lib/toolbarPins";
 
 interface Props {
   doc: NotesDoc;
@@ -239,6 +239,14 @@ function Toolbar({
   });
 
   const [openMenu, setOpenMenu] = useState<MenuId | null>(null);
+  const [pinned, setPinned] = useState<ToolbarItemId[]>(getPinned);
+  // setPinned has no caller yet — Task 4 adds the drag gesture that calls it.
+  // Silences noUnusedLocals without pulling drag logic into this task.
+  void setPinned;
+
+  useEffect(() => {
+    storePinned(pinned);
+  }, [pinned]);
 
   if (!editor || !active) return <div className="toolbar" />;
   const chain = () => editor.chain().focus();
@@ -267,7 +275,7 @@ function Toolbar({
   return (
     <div className="toolbar">
       {MENUS.map((menu) => {
-        const items = TOOLBAR_ITEMS.filter((i) => i.menu === menu.id);
+        const items = TOOLBAR_ITEMS.filter((i) => i.menu === menu.id && !pinned.includes(i.id));
         if (items.length === 0) return null;
         return (
           <MenuBar
@@ -325,6 +333,26 @@ function Toolbar({
               <path d="M9 5.2V9l2.6 1.6" />
             </svg>
           </Btn>
+        </>
+      )}
+
+      {pinned.length > 0 && (
+        <>
+          <span className="toolbar__sep" />
+          {pinned.map((id) => {
+            const item = TOOLBAR_ITEMS.find((i) => i.id === id);
+            if (!item) return null;
+            return (
+              <Btn
+                key={item.id}
+                label={item.label}
+                active={item.isActive(active)}
+                onClick={() => item.run(chain()).run()}
+              >
+                {item.icon}
+              </Btn>
+            );
+          })}
         </>
       )}
     </div>
