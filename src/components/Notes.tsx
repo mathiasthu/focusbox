@@ -55,8 +55,9 @@ function Btn({
       onDragEnd={onDragEnd}
       // preventDefault on mousedown keeps the editor selection visually alive,
       // but it SUPPRESSES native dragstart in WebKit — so draggable buttons
-      // skip it. Their commands still work: chain().focus() restores the
-      // selection from ProseMirror state after the blur.
+      // skip it. On the CLICK path their commands still work (chain().focus()
+      // restores the selection from ProseMirror state after the blur); on the
+      // DRAG path no click fires, so drop handlers restore focus explicitly.
       onMouseDown={draggable ? undefined : (e) => e.preventDefault()}
       onClick={onClick}
     >
@@ -303,7 +304,9 @@ function Toolbar({
     setPinTarget(true);
   }
 
-  function onToolbarDragLeave() {
+  function onToolbarDragLeave(e: DragEvent) {
+    // dragleave also fires when entering a child button — ignore those.
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
     setPinTarget(false);
   }
 
@@ -313,9 +316,10 @@ function Toolbar({
     if (!payload) return;
     e.preventDefault();
     const [source, id] = payload.split(":");
-    if (source === "menu") {
+    if (source === "menu" && TOOLBAR_ITEMS.some((i) => i.id === id)) {
       pinItem(id as ToolbarItemId);
       closeMenu();
+      editor?.commands.focus();
     }
     // source === "pinned": dropped back on the row — no-op, stays pinned (Task 5 adds unpin).
   }
