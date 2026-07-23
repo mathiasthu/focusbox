@@ -220,7 +220,7 @@ export default function Settings({
               <span className="support__heart">♥</span> Support Focusbox
             </button>
             <span className="setting__hint">
-              It's free and open source — support is optional and always appreciated.
+              It's free and the code is public — support is optional and always appreciated.
             </span>
           </div>
         )}

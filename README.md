@@ -9,7 +9,7 @@
 [![Latest release](https://img.shields.io/github/v/release/mathiasthu/focusbox?style=flat-square&labelColor=171410&color=E8920D)](https://github.com/mathiasthu/focusbox/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/mathiasthu/focusbox/total?style=flat-square&labelColor=171410&color=E8920D)](https://github.com/mathiasthu/focusbox/releases)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows-171410?style=flat-square)](https://github.com/mathiasthu/focusbox/releases/latest)
-[![License: MIT](https://img.shields.io/badge/license-MIT-171410?style=flat-square)](#license)
+[![License: Community](https://img.shields.io/badge/license-Community-171410?style=flat-square)](#license)
 
 [**Website**](https://focusbox.net) · [**Try it in your browser**](https://app.focusbox.net) · [**Download**](https://github.com/mathiasthu/focusbox/releases/latest) · [**Support ♥**](https://buy.stripe.com/00w7sNcd1aCY6lEazB6g80O)
 
@@ -80,10 +80,21 @@ Both installers are produced in CI on every `v*` tag — see
 
 ## Support
 
-Focusbox is free and open source. If it helps you focus, you can
+Focusbox is free to use and its code is public. If it helps you focus, you can
 [**support its development**](https://buy.stripe.com/00w7sNcd1aCY6lEazB6g80O) —
 entirely optional, always appreciated. ♥
 
 ## License
 
-[MIT](LICENSE)
+Focusbox is **source-available** under the
+[Focusbox Community License](LICENSE):
+
+- **Use it free** — personal use and internal company use cost nothing, forever.
+- **Build it yourself** — read the code, modify it, compile your own copy,
+  share it for free.
+- **Selling it needs a license** — commercially distributing Focusbox or any
+  rebranded/white-label version of it requires a commercial agreement.
+  Contact **info@focusbox.net**.
+
+Releases up to and including v0.2.11 were published under MIT and remain
+MIT-licensed.
