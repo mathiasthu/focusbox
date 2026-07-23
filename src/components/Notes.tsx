@@ -3,11 +3,11 @@ import StarterKit from "@tiptap/starter-kit";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import Placeholder from "@tiptap/extension-placeholder";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type DragEvent } from "react";
 import type { ChainedCommands } from "@tiptap/core";
 import type { NotesDoc } from "../lib/store";
 import { FocusedLine } from "../lib/focusedLineExtension";
-import { getPinned, storePinned, type ToolbarItemId } from "../lib/toolbarPins";
+import { getPinned, storePinned, MAX_PINS, type ToolbarItemId } from "../lib/toolbarPins";
 
 interface Props {
   doc: NotesDoc;
@@ -20,18 +20,27 @@ interface Props {
   focusDone: boolean;
 }
 
+// Toolbar pin/unpin drag payload: "menu:<id>" (pinning) or "pinned:<id>" (unpinning).
+const TOOLPIN_MIME = "application/x-focusbox-toolpin";
+
 function Btn({
   active,
   onClick,
   label,
   children,
   disabled,
+  draggable,
+  onDragStart,
+  onDragEnd,
 }: {
   active?: boolean;
   onClick: () => void;
   label: string;
   children: ReactNode;
   disabled?: boolean;
+  draggable?: boolean;
+  onDragStart?: (e: DragEvent) => void;
+  onDragEnd?: (e: DragEvent) => void;
 }) {
   return (
     <button
@@ -41,7 +50,14 @@ function Btn({
       aria-pressed={active}
       title={label}
       disabled={disabled}
-      onMouseDown={(e) => e.preventDefault()} // keep editor selection
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      // preventDefault on mousedown keeps the editor selection visually alive,
+      // but it SUPPRESSES native dragstart in WebKit — so draggable buttons
+      // skip it. Their commands still work: chain().focus() restores the
+      // selection from ProseMirror state after the blur.
+      onMouseDown={draggable ? undefined : (e) => e.preventDefault()}
       onClick={onClick}
     >
       {children}
@@ -106,7 +122,7 @@ function MenuBar({
         </svg>
       </button>
       {open && (
-        <div className="tool-menu__panel" onMouseDown={(e) => e.preventDefault()}>
+        <div className="tool-menu__panel">
           {children}
         </div>
       )}
@@ -240,9 +256,7 @@ function Toolbar({
 
   const [openMenu, setOpenMenu] = useState<MenuId | null>(null);
   const [pinned, setPinned] = useState<ToolbarItemId[]>(getPinned);
-  // setPinned has no caller yet — Task 4 adds the drag gesture that calls it.
-  // Silences noUnusedLocals without pulling drag logic into this task.
-  void setPinned;
+  const [pinTarget, setPinTarget] = useState(false);
 
   useEffect(() => {
     storePinned(pinned);
@@ -272,8 +286,46 @@ function Toolbar({
     if (!line) return;
     onFocusLine(line.pos);
   }
+
+  function pinItem(id: ToolbarItemId) {
+    setPinned((prev) => {
+      const next = prev.filter((p) => p !== id);
+      next.push(id);
+      // Cap: bump the oldest pin back to its dropdown.
+      return next.slice(-MAX_PINS);
+    });
+  }
+
+  function onToolbarDragOver(e: DragEvent) {
+    if (!e.dataTransfer.types.includes(TOOLPIN_MIME)) return;
+    e.preventDefault(); // accept the drop (also for pinned:* — keeps dropEffect "move" so dragEnd won't unpin)
+    e.dataTransfer.dropEffect = "move";
+    setPinTarget(true);
+  }
+
+  function onToolbarDragLeave() {
+    setPinTarget(false);
+  }
+
+  function onToolbarDrop(e: DragEvent) {
+    setPinTarget(false);
+    const payload = e.dataTransfer.getData(TOOLPIN_MIME);
+    if (!payload) return;
+    e.preventDefault();
+    const [source, id] = payload.split(":");
+    if (source === "menu") {
+      pinItem(id as ToolbarItemId);
+      closeMenu();
+    }
+    // source === "pinned": dropped back on the row — no-op, stays pinned (Task 5 adds unpin).
+  }
   return (
-    <div className="toolbar">
+    <div
+      className={`toolbar${pinTarget ? " toolbar--pin-target" : ""}`}
+      onDragOver={onToolbarDragOver}
+      onDragLeave={onToolbarDragLeave}
+      onDrop={onToolbarDrop}
+    >
       {MENUS.map((menu) => {
         const items = TOOLBAR_ITEMS.filter((i) => i.menu === menu.id && !pinned.includes(i.id));
         if (items.length === 0) return null;
@@ -290,8 +342,13 @@ function Toolbar({
             {items.map((item) => (
               <Btn
                 key={item.id}
-                label={item.label}
+                label={`${item.label} (drag out to pin)`}
                 active={item.isActive(active)}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData(TOOLPIN_MIME, `menu:${item.id}`);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
                 onClick={() => {
                   item.run(chain()).run();
                   closeMenu();
