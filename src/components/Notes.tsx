@@ -3,7 +3,7 @@ import StarterKit from "@tiptap/starter-kit";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import Placeholder from "@tiptap/extension-placeholder";
-import { useEffect, useRef, useState, type ReactNode, type DragEvent } from "react";
+import { useEffect, useRef, useState, type ReactNode, type DragEvent, type RefObject } from "react";
 import type { ChainedCommands } from "@tiptap/core";
 import type { NotesDoc } from "../lib/store";
 import { FocusedLine } from "../lib/focusedLineExtension";
@@ -22,6 +22,16 @@ interface Props {
 
 // Toolbar pin/unpin drag payload: "menu:<id>" (pinning) or "pinned:<id>" (unpinning).
 const TOOLPIN_MIME = "application/x-focusbox-toolpin";
+
+// Active pin/unpin drag, tracked in React (WKWebView hides custom MIME types
+// from dataTransfer.types during dragover, and dropEffect is unreliable in
+// dragend there — so drop targets decide from this instead, same pattern as
+// App.tsx's lineDragging state for the focus-slot drag).
+interface PinDrag {
+  source: "menu" | "pinned";
+  id: ToolbarItemId;
+  handled: boolean; // set by whichever drop target consumed the drop
+}
 
 function Btn({
   active,
@@ -78,6 +88,7 @@ function MenuBar({
   onToggle,
   onClose,
   onUnpinDrop,
+  pinDragRef,
   children,
 }: {
   label: string;
@@ -86,7 +97,8 @@ function MenuBar({
   open: boolean;
   onToggle: () => void;
   onClose: () => void;
-  onUnpinDrop?: (id: string) => void;
+  onUnpinDrop?: (id: ToolbarItemId) => void;
+  pinDragRef?: RefObject<PinDrag | null>;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -108,18 +120,17 @@ function MenuBar({
   }, [open, onClose]);
 
   function onDragOver(e: DragEvent) {
-    if (!onUnpinDrop) return;
-    if (!e.dataTransfer.types.includes(TOOLPIN_MIME)) return;
+    if (!onUnpinDrop || pinDragRef?.current?.source !== "pinned") return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
   }
   function onDrop(e: DragEvent) {
-    if (!onUnpinDrop) return;
-    const payload = e.dataTransfer.getData(TOOLPIN_MIME);
-    if (!payload.startsWith("pinned:")) return; // a menu item dropped on a menu — ignore
+    const d = pinDragRef?.current;
+    if (!onUnpinDrop || !d || d.source !== "pinned") return;
     e.preventDefault();
-    e.stopPropagation(); // handled here — don't let the toolbar's drop handler see it too
-    onUnpinDrop(payload.slice("pinned:".length));
+    e.stopPropagation(); // handled here — don't let the toolbar's drop handler see it
+    d.handled = true;
+    onUnpinDrop(d.id);
   }
 
   return (
@@ -275,6 +286,7 @@ function Toolbar({
   const [openMenu, setOpenMenu] = useState<MenuId | null>(null);
   const [pinned, setPinned] = useState<ToolbarItemId[]>(getPinned);
   const [pinTarget, setPinTarget] = useState(false);
+  const pinDrag = useRef<PinDrag | null>(null);
 
   useEffect(() => {
     storePinned(pinned);
@@ -319,8 +331,8 @@ function Toolbar({
   }
 
   function onToolbarDragOver(e: DragEvent) {
-    if (!e.dataTransfer.types.includes(TOOLPIN_MIME)) return;
-    e.preventDefault(); // accept the drop (also for pinned:* — keeps dropEffect "move" so dragEnd won't unpin)
+    if (!pinDrag.current) return;
+    e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     setPinTarget(true);
   }
@@ -333,16 +345,16 @@ function Toolbar({
 
   function onToolbarDrop(e: DragEvent) {
     setPinTarget(false);
-    const payload = e.dataTransfer.getData(TOOLPIN_MIME);
-    if (!payload) return;
+    const d = pinDrag.current;
+    if (!d) return;
     e.preventDefault();
-    const [source, id] = payload.split(":");
-    if (source === "menu" && TOOLBAR_ITEMS.some((i) => i.id === id)) {
-      pinItem(id as ToolbarItemId);
+    d.handled = true;
+    if (d.source === "menu") {
+      pinItem(d.id);
       closeMenu();
       editor?.commands.focus();
     }
-    // source === "pinned": dropped back on the row — no-op, stays pinned (Task 5 adds unpin).
+    // source "pinned": dropped back on the row — stays pinned.
   }
   return (
     <div
@@ -363,9 +375,8 @@ function Toolbar({
             open={openMenu === menu.id}
             onToggle={() => setOpenMenu((m) => (m === menu.id ? null : menu.id))}
             onClose={closeMenu}
-            onUnpinDrop={(id) => {
-              if (TOOLBAR_ITEMS.some((i) => i.id === id)) unpinItem(id as ToolbarItemId);
-            }}
+            onUnpinDrop={unpinItem}
+            pinDragRef={pinDrag}
           >
             {items.map((item) => (
               <Btn
@@ -376,6 +387,11 @@ function Toolbar({
                 onDragStart={(e) => {
                   e.dataTransfer.setData(TOOLPIN_MIME, `menu:${item.id}`);
                   e.dataTransfer.effectAllowed = "move";
+                  pinDrag.current = { source: "menu", id: item.id, handled: false };
+                }}
+                onDragEnd={() => {
+                  pinDrag.current = null;
+                  setPinTarget(false);
                 }}
                 onClick={() => {
                   item.run(chain()).run();
@@ -436,9 +452,14 @@ function Toolbar({
                 onDragStart={(e) => {
                   e.dataTransfer.setData(TOOLPIN_MIME, `pinned:${item.id}`);
                   e.dataTransfer.effectAllowed = "move";
+                  pinDrag.current = { source: "pinned", id: item.id, handled: false };
                 }}
-                onDragEnd={(e) => {
-                  if (e.dataTransfer.dropEffect === "none") unpinItem(item.id);
+                onDragEnd={() => {
+                  const d = pinDrag.current;
+                  pinDrag.current = null;
+                  setPinTarget(false);
+                  // No drop target consumed it -> released off the row -> unpin.
+                  if (d && !d.handled) unpinItem(d.id);
                 }}
                 onClick={() => item.run(chain()).run()}
               >
