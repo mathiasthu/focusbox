@@ -375,7 +375,13 @@ function Toolbar({
             open={openMenu === menu.id}
             onToggle={() => setOpenMenu((m) => (m === menu.id ? null : menu.id))}
             onClose={closeMenu}
-            onUnpinDrop={unpinItem}
+            onUnpinDrop={(id) => {
+              // Clear the drop highlight here: unpinning unmounts the dragged
+              // button, and WKWebView then never delivers its dragend (whose
+              // cleanup would normally clear it).
+              setPinTarget(false);
+              unpinItem(id);
+            }}
             pinDragRef={pinDrag}
           >
             {items.map((item) => (
