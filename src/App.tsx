@@ -11,7 +11,7 @@ import { checkForUpdate, installUpdateAndRestart, type UpdateInfo } from "./lib/
 import { loadState, saveState, type NotesDoc } from "./lib/store";
 import { getFocusedTask, clearFocused, markFocusedDone, clearDone } from "./lib/focusedLine";
 import type { SyncedTask } from "./lib/syncTypes";
-import { newTaskId, reconcileTasks, visibleTasks, type VisibleTask } from "./lib/taskMap";
+import { reconcileTasks, visibleTasks, type VisibleTask } from "./lib/taskMap";
 import { appendTaskLines } from "./lib/notesEdit";
 import { useSync } from "./hooks/useSync";
 import {
@@ -170,17 +170,6 @@ export default function App() {
     setNotesDoc(next);
     saveState({ notesDoc: next });
     sync.notifyNotesChanged(Date.now());
-  }
-
-  // Clock toolbar button: each selected notepad line becomes a new left task.
-  function addTasksFromNotes(lines: string[]) {
-    const additions: VisibleTask[] = lines.map((text) => ({
-      id: newTaskId(),
-      text,
-      done: false,
-    }));
-    if (additions.length === 0) return;
-    updateTasks([...visibleTasks(tasks), ...additions]);
   }
 
   // End-of-session reset (fired only when the timer ran out): drop the marked
@@ -354,11 +343,9 @@ export default function App() {
         <Notes
           doc={notesDoc}
           onChange={updateNotes}
-          onAddTasks={addTasksFromNotes}
           onEditorReady={(ed) => { editorRef.current = ed; }}
           onLineDragChange={setLineDragging}
           onFocusLine={focusLineAt}
-          showTasks={showTasks}
           focusDone={!!focusTask?.done}
         />
       </main>
