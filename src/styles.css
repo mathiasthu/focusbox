@@ -1357,10 +1357,11 @@ body::after {
 
 /* --- focused notepad line --- */
 .notes__editor li[data-focused="true"] {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
   border-radius: 6px;
-  box-shadow: inset 4px 0 0 var(--accent);
-  padding-left: 4px;
+  box-shadow: inset 3px 0 0 var(--accent);
+  padding: 0 10px 0 9px;
+  margin-left: -4px;
 }
 /* done → drop the highlight. State-driven via the .notes--focus-done wrapper
    class (set from focusTask.done in App.tsx), not a `:has(s)` DOM heuristic —
@@ -1369,7 +1370,8 @@ body::after {
 .notes--focus-done .notes__editor li[data-focused="true"] {
   background: none;
   box-shadow: none;
-  padding-left: 0;
+  padding: 0;
+  margin-left: 0;
 }
 
 /* --- drop slot + focus card under the timer --- */
