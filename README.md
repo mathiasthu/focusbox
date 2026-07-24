@@ -10,8 +10,9 @@
 [![Downloads](https://img.shields.io/github/downloads/mathiasthu/focusbox/total?style=flat-square&labelColor=171410&color=E8920D)](https://github.com/mathiasthu/focusbox/releases)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Windows-171410?style=flat-square)](https://github.com/mathiasthu/focusbox/releases/latest)
 [![License: Community](https://img.shields.io/badge/license-Community-171410?style=flat-square)](#license)
+[![Discord](https://img.shields.io/badge/Discord-Join-171410?style=flat-square&logo=discord&logoColor=5865F2)](https://discord.gg/ddG9HXYdyC)
 
-[**Website**](https://focusbox.net) · [**Try it in your browser**](https://app.focusbox.net) · [**Download**](https://github.com/mathiasthu/focusbox/releases/latest) · [**Support ♥**](https://buy.stripe.com/00w7sNcd1aCY6lEazB6g80O)
+[**Website**](https://focusbox.net) · [**Try it in your browser**](https://app.focusbox.net) · [**Download**](https://github.com/mathiasthu/focusbox/releases/latest) · [**Discord**](https://discord.gg/ddG9HXYdyC) · [**Support ♥**](https://buy.stripe.com/00w7sNcd1aCY6lEazB6g80O)
 
 <img src=".github/media/app-window.png" width="720" alt="The Focusbox window: a depleting focus timer and task list on the left, a clean notes page on the right." />
 
