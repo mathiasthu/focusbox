@@ -4,6 +4,7 @@ import { createHttpApi, type FetchImpl } from "../lib/api";
 import { SYNC_API_URL } from "../lib/config";
 import { isTauri } from "../lib/store";
 import { clearSync, loadSync, newDeviceId, saveSync } from "../lib/syncStore";
+import { loadOwner, saveOwner } from "../lib/syncOwner";
 import {
   SyncManager,
   type ConflictContent,
@@ -93,6 +94,7 @@ export function useSync(args: {
           api,
           now: () => Date.now(),
           persist: { load: loadSync, save: saveSync, clear: clearSync, newDeviceId },
+          owner: { load: loadOwner, save: saveOwner },
           getLocal: () => getLocalRef.current(),
           onMerged: (m) => onMergedRef.current(m),
           onChange: () => {

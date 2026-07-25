@@ -8,6 +8,7 @@ import {
   rewrapForNewPassword,
   recoveryAuthHashFromKey,
   encryptBlob,
+  ownerTagFromAdk,
 } from "./crypto";
 import {
   listConflicts as listConflictsFn,
@@ -30,6 +31,13 @@ import {
 import { emptySyncState, syncOnce, type LocalData, type SyncState } from "./sync";
 import { KEY_NOTES, type NotesValue } from "./syncTypes";
 import type { SyncPersist } from "./syncStore";
+import {
+  emptyOwnerRecord,
+  normalizeOwnerRecord,
+  trimStash,
+  MAX_STASHED_OWNERS,
+  type OwnerRecord,
+} from "./syncOwner";
 
 // "paused" = subscription inactive; writes are gated, the local app keeps working.
 export type SyncStatus = "signed-out" | "idle" | "syncing" | "error" | "needs-relogin" | "paused";
@@ -97,6 +105,12 @@ export interface SyncManagerDeps {
     clear: () => Promise<void>;
     newDeviceId: () => string;
   };
+  /** Which account the local tasks/notes belong to. Survives logout on purpose — see
+   * syncOwner.ts; without it a co-user's sign-in adopts the previous account's data. */
+  owner: {
+    load: () => Promise<OwnerRecord | null>;
+    save: (r: OwnerRecord) => Promise<void>;
+  };
   getLocal: () => LocalSnapshot;
   onMerged: (m: MergedSnapshot) => void;
   onChange: () => void;
@@ -128,6 +142,12 @@ export class SyncManager {
   // to detect a task edit that lands mid-cycle (same staleness guard as settings/notes).
   private tasksUpdatedAt = 0;
   private snapshotTasksUpdatedAt = 0;
+  /** Set when a sign-in swapped the working data because it belonged to another account.
+   * While it is set, getLocal() is NOT trusted for tasks/notes: the app applies onMerged
+   * asynchronously, so a read could still return the previous owner's data and push it
+   * into this account (the hazard restoreConflict() documents). Cleared by the first
+   * user-driven local change, and kept in step with each cycle's applied result. */
+  private localOverride: LocalSnapshot | null = null;
 
   private status: SyncStatus = "signed-out";
   private lastSyncedAt: number | null = null;
@@ -183,6 +203,7 @@ export class SyncManager {
     this.state = p.state ?? emptySyncState();
     this.settingsUpdatedAt = p.settingsUpdatedAt ?? 0;
     this.notesUpdatedAt = p.notesUpdatedAt ?? 0;
+    await this.claimResumedSession();
     this.status = "idle";
     this.emit();
     await this.refreshAccount();
@@ -197,6 +218,7 @@ export class SyncManager {
     try {
       const created = await createAccount(email, password);
       const tokens = await this.d.api.signup(email, created.signup);
+      await this.claimLocalData(created.session.adk);
       this.setIdentity(email, tokens.access_token, tokens.refresh_token, created.session.adk, {
         notesUpdatedAt: this.d.now(),
         settingsUpdatedAt: this.d.now(),
@@ -222,7 +244,7 @@ export class SyncManager {
       const start = startLogin(email, password);
       const res = await this.d.api.login(email, start.auth_hash);
       const session = completeLogin(start.encKey, res.wrapped_adk);
-      const local = this.d.getLocal();
+      const local = await this.claimLocalData(session.adk);
       this.setIdentity(email, res.access_token, res.refresh_token, session.adk, {
         // Preserve local notes if any (they win/conflict-copy); otherwise adopt server.
         notesUpdatedAt: local.notesDoc ? this.d.now() : 0,
@@ -257,7 +279,7 @@ export class SyncManager {
         new_wrapped_adk: rewrapped.wrapped_adk,
         kdf_params: rewrapped.kdf_params,
       });
-      const local = this.d.getLocal();
+      const local = await this.claimLocalData(adk);
       this.setIdentity(email, tokens.access_token, tokens.refresh_token, adk, {
         notesUpdatedAt: local.notesDoc ? this.d.now() : 0,
         settingsUpdatedAt: 0,
@@ -296,6 +318,9 @@ export class SyncManager {
     this.notesUpdatedAt = 0;
     this.tasksUpdatedAt = 0;
     this.snapshotTasksUpdatedAt = 0;
+    this.localOverride = null;
+    // The owner record is deliberately NOT cleared: tasks/notes stay in the app after
+    // sign-out, so the marker saying whose they are has to stay with them.
     this.status = "signed-out";
     this.lastError = null;
     this.recoveryKey = null;
@@ -328,14 +353,17 @@ export class SyncManager {
 
   notifyTasksChanged(): void {
     this.tasksUpdatedAt = this.d.now();
+    this.localOverride = null; // the app's state is live again: a user edit came from it
     this.scheduleSync();
   }
   notifyNotesChanged(at: number): void {
     if (at > this.notesUpdatedAt) this.notesUpdatedAt = at;
+    this.localOverride = null;
     this.scheduleSync();
   }
   notifySettingsChanged(at: number): void {
     if (at > this.settingsUpdatedAt) this.settingsUpdatedAt = at;
+    this.localOverride = null;
     this.scheduleSync();
   }
 
@@ -555,7 +583,7 @@ export class SyncManager {
   // ---- internals ----
 
   private buildLocalData(): LocalData {
-    const s = this.d.getLocal();
+    const s = this.localOverride ?? this.d.getLocal();
     // Freeze the tasks clock alongside this snapshot so applyResult can tell whether a
     // task edit landed after the snapshot but before the cycle applied its result.
     this.snapshotTasksUpdatedAt = this.tasksUpdatedAt;
@@ -624,20 +652,97 @@ export class SyncManager {
     // UI/local data. If the write fails it propagates to syncNow() and surfaces as a
     // sync error, instead of the UI getting ahead of a baseline that never saved.
     await this.persistIdentity();
-    const cur = settingsStale || notesStale || tasksStale ? this.d.getLocal() : null;
-    this.d.onMerged({
-      tasks: tasksStale ? cur!.tasks : res.local.tasks,
-      notesDoc: notesStale ? cur!.notesDoc : res.local.notes.doc,
-      settings: settingsStale
-        ? cur!.settings
-        : {
-            theme: res.local.settings.theme,
-            accent: res.local.settings.accent,
-            spotifyEnabled: res.local.settings.spotifyEnabled,
-            showTasks: res.local.settings.showTasks,
-            menubarTimer: res.local.settings.menubarTimer,
-          },
-    });
+    // While a sign-in swap is in force the app's own state may still hold the PREVIOUS
+    // owner's tasks/notes (onMerged hasn't flushed), so the staleness fallback must not
+    // read it back — that read is exactly how the other account's data would return.
+    const cur =
+      this.localOverride === null && (settingsStale || notesStale || tasksStale)
+        ? this.d.getLocal()
+        : null;
+    const merged: MergedSnapshot = {
+      tasks: tasksStale && cur ? cur.tasks : res.local.tasks,
+      notesDoc: notesStale && cur ? cur.notesDoc : res.local.notes.doc,
+      settings:
+        settingsStale && cur
+          ? cur.settings
+          : {
+              theme: res.local.settings.theme,
+              accent: res.local.settings.accent,
+              spotifyEnabled: res.local.settings.spotifyEnabled,
+              showTasks: res.local.settings.showTasks,
+              menubarTimer: res.local.settings.menubarTimer,
+            },
+    };
+    // Keep the override in step with what the app was just handed, so a follow-up cycle
+    // still has an authoritative view instead of falling back to a possibly-unflushed read.
+    if (this.localOverride !== null) this.localOverride = { ...merged };
+    this.d.onMerged(merged);
+  }
+
+  /** A resumed session's account owns the local data by construction (it has been the
+   * signed-in account all along), so just claim it. This also backfills the marker on
+   * installs that predate it — without the backfill their data would still read as
+   * "unowned" and the next account to sign in would adopt it. Non-fatal: a failed write
+   * is retried on the next sign-in, and never blocks resuming. */
+  private async claimResumedSession(): Promise<void> {
+    if (!this.adk) return;
+    try {
+      const tag = ownerTagFromAdk(this.adk);
+      const rec = normalizeOwnerRecord(await this.d.owner.load()) ?? emptyOwnerRecord();
+      if (rec.tag !== tag) await this.d.owner.save({ ...rec, tag });
+    } catch (e) {
+      console.error("Focusbox: couldn't record which account owns the local data.", e);
+    }
+  }
+
+  /**
+   * Decide who the local tasks/notes belong to, before this account syncs.
+   *
+   * logout() leaves tasks and notes in the app on purpose, so at sign-in time they may
+   * belong to a *different* account. Adopting them would push one person's private data
+   * into another person's cloud blobs and overwrite their note (keeping it only as a
+   * conflict copy), so on a mismatch the departing account's data is set aside verbatim —
+   * never deleted, it may be unsynced and irreplaceable — and this account starts from its
+   * own copy (whatever was stashed here last time) or from empty, letting the first sync
+   * cycle fill it in from the server.
+   *
+   * Returns the working data this account actually starts with.
+   */
+  private async claimLocalData(adk: Uint8Array): Promise<LocalSnapshot> {
+    const tag = ownerTagFromAdk(adk);
+    const rec = normalizeOwnerRecord(await this.d.owner.load()) ?? emptyOwnerRecord();
+    const local = this.d.getLocal();
+
+    // Unowned (fresh install, or an install predating the marker) or the same account
+    // signing back in: adopt the local data, exactly as before.
+    if (rec.tag === null || rec.tag === tag) {
+      this.localOverride = null;
+      await this.d.owner.save({ ...rec, tag });
+      return local;
+    }
+
+    // Read this account's own stashed copy BEFORE trimming, so restoring it always wins
+    // over the size cap.
+    const mine = rec.stash[tag] ?? null;
+    const stash = trimStash(
+      {
+        ...rec.stash,
+        [rec.tag]: { tasks: local.tasks, notesDoc: local.notesDoc, savedAt: this.d.now() },
+      },
+      MAX_STASHED_OWNERS,
+    );
+    delete stash[tag]; // it's the working data again now, not a stash entry
+    const mySnapshot: LocalSnapshot = {
+      tasks: mine?.tasks ?? [],
+      notesDoc: mine?.notesDoc ?? null,
+      settings: local.settings, // device-level; the account's own settings win on sign-in
+    };
+    // Save the marker BEFORE anything is pushed: if this write fails the sign-in fails,
+    // rather than syncing with an ownership record the disk doesn't agree with.
+    await this.d.owner.save({ tag, stash });
+    this.localOverride = mySnapshot;
+    this.d.onMerged(mySnapshot);
+    return mySnapshot;
   }
 
   private setIdentity(

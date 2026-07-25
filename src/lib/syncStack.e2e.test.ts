@@ -7,6 +7,7 @@ import { initCrypto } from "./crypto";
 import { createHttpApi } from "./api";
 import { SyncManager, type LocalSnapshot, type MergedSnapshot } from "./syncManager";
 import type { SyncPersist } from "./syncStore";
+import type { OwnerRecord } from "./syncOwner";
 import type { SyncedTask } from "./syncTypes";
 
 const BASE = process.env.FOCUSBOX_SYNC_URL || "http://localhost:8645";
@@ -23,6 +24,7 @@ function makeDevice(name: string, local?: Partial<LocalSnapshot>) {
     ...local,
   };
   const persist = { value: null as SyncPersist | null };
+  const owner = { value: null as OwnerRecord | null };
   const mgr = new SyncManager({
     api: createHttpApi(BASE), // real HTTP client, global fetch
     now,
@@ -36,6 +38,12 @@ function makeDevice(name: string, local?: Partial<LocalSnapshot>) {
         persist.value = null;
       },
       newDeviceId: () => `e2e-${name}`,
+    },
+    owner: {
+      load: async () => owner.value,
+      save: async (r) => {
+        owner.value = r;
+      },
     },
     getLocal: () => state,
     onMerged: (m: MergedSnapshot) => {

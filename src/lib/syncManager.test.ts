@@ -24,6 +24,7 @@ import {
   type MergedSnapshot,
 } from "./syncManager";
 import type { SyncPersist } from "./syncStore";
+import type { OwnerRecord } from "./syncOwner";
 import type { SyncedTask } from "./syncTypes";
 
 // A single shared backend implementing auth + per-user encrypted blob storage,
@@ -228,18 +229,35 @@ interface Device {
   ctl: { failSave: boolean };
 }
 
+/** One physical install: app data + the owner marker, both shared by every account that
+ * signs in on it. Two devices built with the same Install model a shared machine. */
+interface Install {
+  state: LocalSnapshot;
+  owner: { value: OwnerRecord | null; failLoad: boolean };
+}
+
+function makeInstall(local?: Partial<LocalSnapshot>): Install {
+  return {
+    state: {
+      tasks: [],
+      notesDoc: null,
+      settings: { theme: "system", accent: "clay", spotifyEnabled: true, showTasks: true, menubarTimer: true },
+      ...local,
+    },
+    owner: { value: null, failLoad: false },
+  };
+}
+
 function makeDevice(
   api: FakeBackend,
   name: string,
   local?: Partial<LocalSnapshot>,
   scheduler?: { set: (fn: () => void, ms: number) => unknown; clear: (h: unknown) => void },
+  install?: Install,
 ): Device {
-  const state: LocalSnapshot = {
-    tasks: [],
-    notesDoc: null,
-    settings: { theme: "system", accent: "clay", spotifyEnabled: true, showTasks: true, menubarTimer: true },
-    ...local,
-  };
+  const shared = install ?? makeInstall(local);
+  const state: LocalSnapshot = shared.state;
+  const ownerStore = shared.owner;
   const persist = { value: null as SyncPersist | null };
   const ctl = { failSave: false };
   const mgr = new SyncManager({
@@ -256,6 +274,15 @@ function makeDevice(
         persist.value = null;
       },
       newDeviceId: () => `dev-${name}`,
+    },
+    owner: {
+      load: async () => {
+        if (ownerStore.failLoad) throw new Error("store unavailable");
+        return ownerStore.value;
+      },
+      save: async (r) => {
+        ownerStore.value = r;
+      },
     },
     getLocal: () => state,
     onMerged: (m: MergedSnapshot) => {
@@ -481,6 +508,7 @@ describe("SyncManager", () => {
     };
     let applied: MergedSnapshot | null = null;
     const persist = { value: null as SyncPersist | null };
+    const ownerRec = { value: null as OwnerRecord | null };
     const mgrA = new SyncManager({
       api,
       now,
@@ -494,6 +522,12 @@ describe("SyncManager", () => {
           persist.value = null;
         },
         newDeviceId: () => "dev-async",
+      },
+      owner: {
+        load: async () => ownerRec.value,
+        save: async (r) => {
+          ownerRec.value = r;
+        },
       },
       getLocal: () => committed, // never reflects the restore
       onMerged: (m) => {
@@ -732,5 +766,165 @@ describe("SyncManager", () => {
     await p;
 
     expect(a.local.tasks.find((t) => t.id === "t2")?.deleted).toBe(true); // stays deleted
+  });
+});
+
+// F1: on a shared install, logout deliberately leaves tasks/notes behind. A DIFFERENT
+// account signing in afterwards must not adopt them (they'd be pushed into that
+// account's cloud blobs), and must not destroy them either.
+describe("SyncManager — shared-install account switching", () => {
+  it("does not push the previous account's tasks into a newly created account", async () => {
+    const api = new FakeBackend();
+    const install = makeInstall({ tasks: [task("alice-1")], notesDoc: { v: "alice notes" } });
+    const a = makeDevice(api, "A", undefined, undefined, install);
+    await a.mgr.signup("alice@example.com", "pw");
+    await a.mgr.logout(); // by design: Alice's tasks/notes stay in the app
+
+    const b = makeDevice(api, "B", undefined, undefined, install);
+    await b.mgr.signup("bob@example.com", "pw");
+
+    // Read Bob's account from a clean install: none of Alice's data may be in it.
+    const c = makeDevice(api, "C");
+    await c.mgr.login("bob@example.com", "pw");
+    expect(c.local.tasks.map((t) => t.id)).toEqual([]);
+    expect(c.local.notesDoc).toBeNull();
+  });
+
+  it("does not push the previous account's tasks into an existing account on login", async () => {
+    const api = new FakeBackend();
+    const bobsPhone = makeDevice(api, "phone", { tasks: [task("bob-1")] });
+    await bobsPhone.mgr.signup("bob@example.com", "pw");
+
+    const install = makeInstall({ tasks: [task("alice-1")], notesDoc: { v: "alice notes" } });
+    const a = makeDevice(api, "A", undefined, undefined, install);
+    await a.mgr.signup("alice@example.com", "pw");
+    await a.mgr.logout();
+
+    const b = makeDevice(api, "B", undefined, undefined, install);
+    await b.mgr.login("bob@example.com", "pw");
+
+    // The shared install now shows Bob's cloud data only.
+    expect(install.state.tasks.filter((t) => !t.deleted).map((t) => t.id)).toEqual(["bob-1"]);
+    expect(install.state.notesDoc).not.toEqual({ v: "alice notes" });
+
+    // And Bob's cloud account never received Alice's task.
+    const c = makeDevice(api, "C");
+    await c.mgr.login("bob@example.com", "pw");
+    expect(c.local.tasks.map((t) => t.id)).toEqual(["bob-1"]);
+  });
+
+  it("preserves the previous account's unsynced local data instead of wiping it", async () => {
+    const api = new FakeBackend();
+    const install = makeInstall({ tasks: [task("alice-1")], notesDoc: { v: "alice notes" } });
+    const a = makeDevice(api, "A", undefined, undefined, install);
+    await a.mgr.signup("alice@example.com", "pw");
+    await a.mgr.logout();
+    // Alice keeps working locally after signing out — this is unsynced, unrecoverable data.
+    install.state.tasks = [...install.state.tasks, task("alice-offline")];
+    install.state.notesDoc = { v: "alice edited offline" };
+
+    const b = makeDevice(api, "B", undefined, undefined, install);
+    await b.mgr.signup("bob@example.com", "pw");
+    await b.mgr.logout();
+
+    // Alice signs back in on the same install: her offline work comes back.
+    const a2 = makeDevice(api, "A2", undefined, undefined, install);
+    await a2.mgr.login("alice@example.com", "pw");
+    expect(install.state.tasks.filter((t) => !t.deleted).map((t) => t.id).sort()).toEqual([
+      "alice-1",
+      "alice-offline",
+    ]);
+    expect(install.state.notesDoc).toEqual({ v: "alice edited offline" });
+  });
+
+  it("keeps adopting local data for the same account signing back in", async () => {
+    const api = new FakeBackend();
+    const install = makeInstall({ tasks: [task("alice-1")] });
+    const a = makeDevice(api, "A", undefined, undefined, install);
+    await a.mgr.signup("alice@example.com", "pw");
+    await a.mgr.logout();
+    install.state.tasks = [...install.state.tasks, task("alice-2")];
+
+    const a2 = makeDevice(api, "A2", undefined, undefined, install);
+    await a2.mgr.login("alice@example.com", "pw");
+
+    // Same owner → normal adopt-and-push, so the new task reaches the cloud.
+    const c = makeDevice(api, "C");
+    await c.mgr.login("alice@example.com", "pw");
+    expect(c.local.tasks.map((t) => t.id).sort()).toEqual(["alice-1", "alice-2"]);
+  });
+
+  it("does not leak the previous account's data through a password recovery", async () => {
+    const api = new FakeBackend();
+    const bobsPhone = makeDevice(api, "phone");
+    await bobsPhone.mgr.signup("bob@example.com", "pw");
+    const recoveryKey = bobsPhone.mgr.snapshot().recoveryKey!;
+
+    const install = makeInstall({ tasks: [task("alice-1")], notesDoc: { v: "alice notes" } });
+    const a = makeDevice(api, "A", undefined, undefined, install);
+    await a.mgr.signup("alice@example.com", "pw");
+    await a.mgr.logout();
+
+    const b = makeDevice(api, "B", undefined, undefined, install);
+    await b.mgr.recover("bob@example.com", recoveryKey, "newpw");
+
+    const c = makeDevice(api, "C");
+    await c.mgr.login("bob@example.com", "newpw");
+    expect(c.local.tasks.map((t) => t.id)).toEqual([]);
+    expect(c.local.notesDoc).toBeNull();
+  });
+
+  it("records an owner marker that survives logout and never stores the email", async () => {
+    const api = new FakeBackend();
+    const install = makeInstall({ tasks: [task("alice-1")] });
+    const a = makeDevice(api, "A", undefined, undefined, install);
+    await a.mgr.signup("alice@example.com", "pw");
+
+    const afterLogin = install.owner.value;
+    expect(afterLogin?.tag).toBeTypeOf("string");
+    await a.mgr.logout();
+    expect(install.owner.value?.tag).toBe(afterLogin?.tag); // marker outlives the session
+    expect(JSON.stringify(install.owner.value)).not.toContain("alice@example.com");
+  });
+});
+
+// The owner marker is what keeps accounts apart, so a marker that can't be read must not
+// silently degrade into "this data belongs to nobody" — that is the leak again.
+describe("SyncManager — unreadable owner marker", () => {
+  it("fails the login instead of adopting local data when the marker can't be read", async () => {
+    const api = new FakeBackend();
+    const bobsPhone = makeDevice(api, "phone");
+    await bobsPhone.mgr.signup("bob@example.com", "pw");
+
+    const install = makeInstall({ tasks: [task("alice-1")] });
+    const b = makeDevice(api, "B", undefined, undefined, install);
+    install.owner.failLoad = true;
+
+    await expect(b.mgr.login("bob@example.com", "pw")).rejects.toThrow();
+    expect(b.mgr.snapshot().status).toBe("error");
+
+    // Bob's account is untouched by Alice's task.
+    const c = makeDevice(api, "C");
+    await c.mgr.login("bob@example.com", "pw");
+    expect(c.local.tasks.map((t) => t.id)).toEqual([]);
+  });
+
+  it("treats a malformed marker as an unknown owner: preserves the data, adopts nothing", async () => {
+    const api = new FakeBackend();
+    const bobsPhone = makeDevice(api, "phone");
+    await bobsPhone.mgr.signup("bob@example.com", "pw");
+
+    const install = makeInstall({ tasks: [task("alice-1")], notesDoc: { v: "alice notes" } });
+    install.owner.value = { garbage: true } as unknown as OwnerRecord;
+    const b = makeDevice(api, "B", undefined, undefined, install);
+    await b.mgr.login("bob@example.com", "pw");
+
+    expect(b.mgr.snapshot().status).toBe("idle"); // sign-in still works
+    const stashedTasks = Object.values(install.owner.value!.stash).flatMap((s) => s.tasks);
+    expect(stashedTasks.map((t) => t.id)).toEqual(["alice-1"]); // nothing destroyed
+
+    const c = makeDevice(api, "C");
+    await c.mgr.login("bob@example.com", "pw");
+    expect(c.local.tasks.map((t) => t.id)).toEqual([]); // nothing leaked
   });
 });

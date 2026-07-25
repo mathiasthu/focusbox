@@ -22,6 +22,11 @@ const KEY_BYTES = 32;
 // Keyed-BLAKE2b domain separation: the recovery auth hash must be independent of the
 // recovery WRAP key (which is the null-keyed generichash of the same bytes).
 const RECOVERY_AUTH_PERSONAL = "fbsync01-recovery-auth";
+// Domain-separated tag identifying WHICH account owns the local app data. Derived from
+// the ADK — a 32-byte random key — so the on-disk marker can't be brute-forced back to
+// an identity the way a hash of the (low-entropy, guessable) email could.
+const OWNER_TAG_PERSONAL = "fbsync01-owner-tag";
+const OWNER_TAG_BYTES = 16;
 
 export interface KdfParams {
   alg: "argon2id";
@@ -100,6 +105,18 @@ function recoveryAuthBytes(recoveryKeyBytes: Uint8Array): Uint8Array {
     recoveryKeyBytes,
     sodium.from_string(RECOVERY_AUTH_PERSONAL),
   );
+}
+
+/** A stable, one-way tag for the account that owns the local app data. Same ADK → same
+ * tag on every launch; reveals neither the email nor the key. */
+export function ownerTagFromAdk(adk: Uint8Array): string {
+  ensureReady();
+  const tag = sodium.crypto_generichash(
+    OWNER_TAG_BYTES,
+    adk,
+    sodium.from_string(OWNER_TAG_PERSONAL),
+  );
+  return sodium.to_base64(tag, sodium.base64_variants.URLSAFE_NO_PADDING);
 }
 
 // --- public API ---
