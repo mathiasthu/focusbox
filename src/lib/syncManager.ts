@@ -525,6 +525,12 @@ export class SyncManager {
       restoreConflictFn({ api: this.d.api, token: t, adk, deviceId: this.deviceId, key, current, now }),
     );
     this.notesUpdatedAt = notes.updated_at;
+    // A restore replaces the note outside the merge path, so a sign-in swap's authoritative
+    // copy is now stale: keeping it would push the pre-restore doc under the restored
+    // doc's timestamp on the next cycle and silently undo the restore. This path already
+    // treats the app as the source of truth for everything else (it re-reads getLocal
+    // below), so drop the override rather than trying to patch it.
+    this.localOverride = null;
     // Push the restored doc AUTHORITATIVELY — do NOT rely on a follow-up syncNow reading
     // getLocal(), because onMerged is an async setState in the app that may not have
     // flushed yet (so getLocal() would still return the OLD note and overwrite the

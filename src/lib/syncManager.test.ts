@@ -928,3 +928,35 @@ describe("SyncManager — unreadable owner marker", () => {
     expect(c.local.tasks.map((t) => t.id)).toEqual([]); // nothing leaked
   });
 });
+
+// The sign-in swap holds an authoritative copy of the working data (the app applies it
+// asynchronously). restoreConflict() replaces the note through a different path, so that
+// copy must not survive to overwrite the restore on the next cycle.
+describe("SyncManager — restore after a sign-in swap", () => {
+  it("keeps a restored conflict copy as the current note after the next sync cycle", async () => {
+    const api = new FakeBackend();
+    const bobsPhone = makeDevice(api, "phone", { notesDoc: { v: "bob current" } });
+    await bobsPhone.mgr.signup("bob@example.com", "pw");
+
+    // Bob signs in on a shared install where Alice's data was left behind → swap path.
+    const install = makeInstall({ tasks: [task("alice-1")], notesDoc: { v: "alice notes" } });
+    const a = makeDevice(api, "A", undefined, undefined, install);
+    await a.mgr.signup("alice@example.com", "pw");
+    await a.mgr.logout();
+
+    const b = makeDevice(api, "B", undefined, undefined, install);
+    await b.mgr.login("bob@example.com", "pw");
+    expect(install.state.notesDoc).toEqual({ v: "bob current" }); // Bob's own note pulled
+
+    const ckey = await b.mgr.seedConflictForTest({ doc: { v: "restored" }, updated_at: 100 });
+    await b.mgr.restoreConflict(ckey);
+    expect(install.state.notesDoc).toEqual({ v: "restored" });
+
+    await b.mgr.syncNow();
+    expect(install.state.notesDoc).toEqual({ v: "restored" }); // not reverted locally
+
+    const c = makeDevice(api, "C");
+    await c.mgr.login("bob@example.com", "pw");
+    expect(c.local.notesDoc).toEqual({ v: "restored" }); // and not reverted on the server
+  });
+});
