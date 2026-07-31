@@ -11,7 +11,7 @@ import { isDemo } from "./demo";
 const KEY = "focusbox-chime";
 const SOUND_KEY = "focusbox-chime-sound";
 
-export type SoundId = "bell" | "chime" | "ping" | "marimba" | "digital";
+export type SoundId = "bell" | "chime" | "gong" | "bowl" | "harp";
 
 export const DEFAULT_SOUND: SoundId = "bell";
 
@@ -25,6 +25,9 @@ interface Voice {
   level: number;
   /** seconds from attack to (near) silence */
   decay: number;
+  /** seconds to reach peak level. The few-ms default reads as a strike; longer
+   * values swell instead (the singing bowl). Never 0 — that clicks. */
+  attack?: number;
   type?: OscillatorType;
   /** optional pitch glide target, reached at the end of the decay */
   bendTo?: number;
@@ -48,42 +51,56 @@ function chimeNote(delay: number, hz: number): Voice[] {
   ];
 }
 
-// Wooden mallet: the 4:1 upper mode is the marimba's signature, and it dies away
-// almost immediately, leaving the fundamental to ring.
-function marimbaNote(delay: number, hz: number): Voice[] {
+// A plucked string: bright for an instant (the 2nd and 3rd partials go first),
+// then just the fundamental ringing.
+function harpNote(delay: number, hz: number): Voice[] {
   return [
-    { delay, hz, level: 0.11, decay: 0.55 },
-    { delay, hz: hz * 4, level: 0.03, decay: 0.16 },
+    { delay, hz, level: 0.075, decay: 0.9, attack: 0.004 },
+    { delay, hz: hz * 2, level: 0.02, decay: 0.45, attack: 0.004 },
+    { delay, hz: hz * 3, level: 0.01, decay: 0.25, attack: 0.004 },
   ];
 }
 
 const VOICES: Record<SoundId, Voice[]> = {
   bell: [...bellStrike(0, 1), ...bellStrike(0.34, 0.75)],
   chime: [...chimeNote(0, 659.25), ...chimeNote(0.16, 880), ...chimeNote(0.32, 1108.73)],
-  // Single crisp blip with a slight downward glide, so it lands rather than hangs.
-  ping: [
-    { delay: 0, hz: 1318.5, level: 0.1, decay: 0.45, bendTo: 1244.5 },
-    { delay: 0, hz: 2637, level: 0.02, decay: 0.18 },
+  // Low and dark, with dense inharmonic partials over a long tail — the deep end
+  // of the set, where the bell is the bright one.
+  gong: [
+    { delay: 0, hz: 130.81, level: 0.1, decay: 2.6, attack: 0.012 },
+    { delay: 0, hz: 193.6, level: 0.05, decay: 2 },
+    { delay: 0, hz: 278.6, level: 0.035, decay: 1.4 },
+    { delay: 0, hz: 418.6, level: 0.022, decay: 0.9 },
+    { delay: 0, hz: 561, level: 0.015, decay: 0.55 },
   ],
-  marimba: [...marimbaNote(0, 523.25), ...marimbaNote(0.13, 783.99)],
-  // Retro three-blip beeper.
-  digital: [
-    { delay: 0, hz: 1046.5, level: 0.045, decay: 0.09, type: "square" },
-    { delay: 0.13, hz: 1046.5, level: 0.045, decay: 0.09, type: "square" },
-    { delay: 0.26, hz: 1046.5, level: 0.045, decay: 0.09, type: "square" },
+  // Singing bowl: no strike at all, just a swell. The two near-identical pitches
+  // beat slowly against each other, which is the shimmer a real bowl has.
+  bowl: [
+    { delay: 0, hz: 440, level: 0.075, decay: 2.4, attack: 0.09 },
+    { delay: 0, hz: 440.9, level: 0.075, decay: 2.4, attack: 0.09 },
+    { delay: 0, hz: 1174.7, level: 0.02, decay: 1.2, attack: 0.05 },
+  ],
+  // A fast rolled arpeggio — the notes overlap, unlike the chime's spaced ding-dong.
+  harp: [
+    ...harpNote(0, 440),
+    ...harpNote(0.075, 554.37),
+    ...harpNote(0.15, 659.25),
+    ...harpNote(0.225, 880),
   ],
 };
 
 export const SOUNDS: { id: SoundId; label: string }[] = [
   { id: "bell", label: "Bell" },
   { id: "chime", label: "Chime" },
-  { id: "ping", label: "Ping" },
-  { id: "marimba", label: "Marimba" },
-  { id: "digital", label: "Digital" },
+  { id: "gong", label: "Gong" },
+  { id: "bowl", label: "Bowl" },
+  { id: "harp", label: "Harp" },
 ];
 
 /** Falls back to the default for anything unrecognised — a stored value from a
- * newer build, or a settings blob synced down from one. */
+ * newer build, a settings blob synced down from one, or one of the retired sounds
+ * ("ping" / "marimba" / "digital"), which is how anyone who had picked one gets
+ * moved to the bell. */
 export function normalizeSoundId(value: unknown): SoundId {
   return SOUNDS.some((s) => s.id === value) ? (value as SoundId) : DEFAULT_SOUND;
 }
@@ -141,7 +158,7 @@ function schedule(ac: AudioContext, voices: Voice[], t0: number) {
     const g = ac.createGain();
     // Ramp up over a few ms instead of starting at full level: a hard start clicks.
     g.gain.setValueAtTime(0, at);
-    g.gain.linearRampToValueAtTime(v.level, at + 0.006);
+    g.gain.linearRampToValueAtTime(v.level, at + (v.attack ?? 0.006));
     // exponentialRamp can't reach 0, so decay to a near-silent floor.
     g.gain.exponentialRampToValueAtTime(0.0001, at + v.decay);
     osc.connect(g);
