@@ -241,7 +241,7 @@ function makeInstall(local?: Partial<LocalSnapshot>): Install {
     state: {
       tasks: [],
       notesDoc: null,
-      settings: { theme: "system", accent: "clay", spotifyEnabled: true, showTasks: true, menubarTimer: true, chime: false },
+      settings: { theme: "system", accent: "clay", spotifyEnabled: true, showTasks: true, menubarTimer: true, chime: false, chimeSound: "bell" },
       ...local,
     },
     owner: { value: null, failLoad: false },
@@ -504,7 +504,7 @@ describe("SyncManager", () => {
     const committed: LocalSnapshot = {
       tasks: [],
       notesDoc: { v: "current" },
-      settings: { theme: "system", accent: "clay", spotifyEnabled: true, showTasks: true, menubarTimer: true, chime: false },
+      settings: { theme: "system", accent: "clay", spotifyEnabled: true, showTasks: true, menubarTimer: true, chime: false, chimeSound: "bell" },
     };
     let applied: MergedSnapshot | null = null;
     const persist = { value: null as SyncPersist | null };
@@ -690,7 +690,7 @@ describe("SyncManager", () => {
     const a = makeDevice(
       api,
       "A",
-      { settings: { theme: "dark", accent: "clay", spotifyEnabled: true, showTasks: true, menubarTimer: true, chime: false } },
+      { settings: { theme: "dark", accent: "clay", spotifyEnabled: true, showTasks: true, menubarTimer: true, chime: false, chimeSound: "bell" } },
       fk.scheduler,
     );
     await a.mgr.signup("theme-race@e.com", "pw"); // initial push: settings(theme=dark)

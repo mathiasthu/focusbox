@@ -29,6 +29,7 @@ export interface SettingsValue {
   showTasks: boolean;
   menubarTimer: boolean;
   chime: boolean;
+  chimeSound: string;
   updated_at: Millis;
 }
 

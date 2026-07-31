@@ -29,7 +29,15 @@ import {
 import { getPlayerVisible, storePlayerVisible, isSpotifyAvailable } from "./lib/spotify";
 import { getShowTasks, storeShowTasks } from "./lib/tasksVisibility";
 import { getMenubarTimer, storeMenubarTimer } from "./lib/trayVisibility";
-import { getChime, storeChime, playChime } from "./lib/chime";
+import {
+  getChime,
+  storeChime,
+  getChimeSound,
+  storeChimeSound,
+  playChime,
+  normalizeSoundId,
+  type SoundId,
+} from "./lib/chime";
 import { initTray, setTrayTitle, destroyTray, trayTitleFor, isTrayAvailable } from "./lib/tray";
 import { isDemo } from "./lib/demo";
 
@@ -45,6 +53,7 @@ export default function App() {
   const [showTasks, setShowTasks] = useState<boolean>(getShowTasks);
   const [menubarTimer, setMenubarTimer] = useState<boolean>(getMenubarTimer);
   const [chime, setChime] = useState<boolean>(getChime);
+  const [chimeSound, setChimeSound] = useState<SoundId>(getChimeSound);
   // Latest tray display string, derived from Timer's onTick — null means "icon only".
   const [trayText, setTrayText] = useState<string | null>(null);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
@@ -63,7 +72,7 @@ export default function App() {
     getLocal: () => ({
       tasks,
       notesDoc,
-      settings: { theme: themeMode, accent, spotifyEnabled: playerVisible, showTasks, menubarTimer, chime },
+      settings: { theme: themeMode, accent, spotifyEnabled: playerVisible, showTasks, menubarTimer, chime, chimeSound },
     }),
     onMerged: (m) => {
       // Only touch state that actually changed, so a no-op sync (e.g. window focus)
@@ -83,6 +92,7 @@ export default function App() {
       if (m.settings.showTasks !== showTasks) setShowTasks(m.settings.showTasks);
       if (m.settings.menubarTimer !== menubarTimer) setMenubarTimer(m.settings.menubarTimer);
       if (m.settings.chime !== chime) setChime(m.settings.chime);
+      if (m.settings.chimeSound !== chimeSound) setChimeSound(normalizeSoundId(m.settings.chimeSound));
     },
   });
 
@@ -142,10 +152,13 @@ export default function App() {
     storeMenubarTimer(menubarTimer);
   }, [menubarTimer]);
 
-  // Persist the "timer sound" preference.
+  // Persist the "timer sound" preferences (on/off + which sound).
   useEffect(() => {
     storeChime(chime);
   }, [chime]);
+  useEffect(() => {
+    storeChimeSound(chimeSound);
+  }, [chimeSound]);
 
   // Create/destroy the macOS tray item as the setting is toggled (no-op off-mac/web).
   useEffect(() => {
@@ -282,6 +295,10 @@ export default function App() {
     setChime(enabled);
     sync.notifySettingsChanged(Date.now());
   }
+  function changeChimeSound(id: SoundId) {
+    setChimeSound(id);
+    sync.notifySettingsChanged(Date.now());
+  }
 
   // Timer tick/status -> tray display string (running "mm:ss" / paused frozen /
   // finished "0:00" / idle icon-only). Cheap to call every tick; setTrayTitle itself
@@ -292,7 +309,7 @@ export default function App() {
 
   // Countdown hit zero: ring, if the user turned the sound on.
   function handleTimerFinish() {
-    if (chime) playChime();
+    if (chime) playChime(chimeSound);
   }
 
   // Download + install the update, then relaunch. On Windows the installer closes the
@@ -387,6 +404,8 @@ export default function App() {
         onMenubarTimerChange={changeMenubarTimer}
         chime={chime}
         onChimeChange={changeChime}
+        chimeSound={chimeSound}
+        onChimeSoundChange={changeChimeSound}
         sync={sync}
         demo={demo}
       />

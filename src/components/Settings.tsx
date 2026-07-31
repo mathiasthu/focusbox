@@ -4,7 +4,7 @@ import { ACCENTS, type AccentId } from "../lib/accent";
 import { SUPPORT_URL, SUPPORT_EMAIL, APP_VERSION } from "../lib/config";
 import { isSpotifyAvailable } from "../lib/spotify";
 import { isTrayAvailable } from "../lib/tray";
-import { playChime } from "../lib/chime";
+import { playChime, SOUNDS, type SoundId } from "../lib/chime";
 import AccountSync from "./AccountSync";
 import type { SyncController } from "../hooks/useSync";
 
@@ -64,6 +64,8 @@ interface Props {
   onMenubarTimerChange: (visible: boolean) => void;
   chime: boolean;
   onChimeChange: (enabled: boolean) => void;
+  chimeSound: SoundId;
+  onChimeSoundChange: (id: SoundId) => void;
   sync: SyncController;
   demo: boolean;
 }
@@ -83,6 +85,8 @@ export default function Settings({
   onMenubarTimerChange,
   chime,
   onChimeChange,
+  chimeSound,
+  onChimeSoundChange,
   sync,
   demo,
 }: Props) {
@@ -179,7 +183,7 @@ export default function Settings({
               aria-pressed={chime}
               onClick={() => {
                 onChimeChange(true);
-                playChime(); // preview, so the choice is audible right away
+                playChime(chimeSound); // preview, so the choice is audible right away
               }}
             >
               On
@@ -194,6 +198,31 @@ export default function Settings({
             </button>
           </div>
         </div>
+
+        {/* Only worth showing once the sound is on — five options is a lot of modal
+            to spend on a setting that's currently doing nothing. */}
+        {chime && (
+          <div className="setting setting--col">
+            <span className="setting__label">Sound</span>
+            <div className="soundpicker" role="group" aria-label="Sound">
+              {SOUNDS.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  className={`soundopt${chimeSound === s.id ? " soundopt--active" : ""}`}
+                  aria-pressed={chimeSound === s.id}
+                  onClick={() => {
+                    onChimeSoundChange(s.id);
+                    playChime(s.id); // preview the one just picked
+                  }}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+            <span className="setting__hint">Pick one to hear it.</span>
+          </div>
+        )}
 
         {isTrayAvailable && (
           <div className="setting">

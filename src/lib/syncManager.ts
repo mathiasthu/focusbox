@@ -55,6 +55,7 @@ export interface LocalSnapshot {
     showTasks: boolean;
     menubarTimer: boolean;
     chime: boolean;
+    chimeSound: string;
   };
 }
 
@@ -69,6 +70,7 @@ export interface MergedSnapshot {
     showTasks: boolean;
     menubarTimer: boolean;
     chime: boolean;
+    chimeSound: string;
   };
 }
 
@@ -682,6 +684,7 @@ export class SyncManager {
               // Older clients push a settings blob without this key; if such a blob
               // wins LWW the field arrives undefined, so fall back to the default.
               chime: res.local.settings.chime ?? false,
+              chimeSound: res.local.settings.chimeSound ?? "bell",
             },
     };
     // Keep the override in step with what the app was just handed, so a follow-up cycle

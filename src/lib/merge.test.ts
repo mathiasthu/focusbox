@@ -61,6 +61,7 @@ describe("mergeSettings (LWW)", () => {
     showTasks: true,
     menubarTimer: true,
     chime: false,
+    chimeSound: "bell",
     updated_at: 1,
     ...over,
   });

@@ -411,6 +411,41 @@ body::after {
   box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--swatch);
 }
 
+/* Timer-sound picker: five pills, wrapping — too many to fit the .segmented row
+   the other settings use. */
+.soundpicker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.soundopt {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.soundopt:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.soundopt--active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+/* .soundopt:hover would otherwise paint accent text on the accent fill. */
+.soundopt--active:hover {
+  background: var(--accent-deep);
+  border-color: var(--accent-deep);
+  color: var(--on-accent);
+}
+
 .modal .support {
   margin-top: 0;
   align-self: flex-start;
