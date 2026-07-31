@@ -28,6 +28,7 @@ export interface SettingsValue {
   spotifyEnabled: boolean;
   showTasks: boolean;
   menubarTimer: boolean;
+  chime: boolean;
   updated_at: Millis;
 }
 

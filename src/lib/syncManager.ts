@@ -54,6 +54,7 @@ export interface LocalSnapshot {
     spotifyEnabled: boolean;
     showTasks: boolean;
     menubarTimer: boolean;
+    chime: boolean;
   };
 }
 
@@ -67,6 +68,7 @@ export interface MergedSnapshot {
     spotifyEnabled: boolean;
     showTasks: boolean;
     menubarTimer: boolean;
+    chime: boolean;
   };
 }
 
@@ -677,6 +679,9 @@ export class SyncManager {
               spotifyEnabled: res.local.settings.spotifyEnabled,
               showTasks: res.local.settings.showTasks,
               menubarTimer: res.local.settings.menubarTimer,
+              // Older clients push a settings blob without this key; if such a blob
+              // wins LWW the field arrives undefined, so fall back to the default.
+              chime: res.local.settings.chime ?? false,
             },
     };
     // Keep the override in step with what the app was just handed, so a follow-up cycle

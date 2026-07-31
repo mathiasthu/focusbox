@@ -41,9 +41,13 @@ interface Props {
   // derive their own display string from (remainingMs, status) — the timer
   // itself stays unaware of the tray.
   onTick?: (remainingMs: number, status: string) => void;
+  // Fired once each time the countdown reaches zero (including after an "+N min"
+  // extension). Used for the optional end-of-timer chime; the timer itself stays
+  // unaware of sound, same as it does with the tray.
+  onFinish?: () => void;
 }
 
-export default function Timer({ onTimeUpReset, onReset, onTick }: Props) {
+export default function Timer({ onTimeUpReset, onReset, onTick, onFinish }: Props) {
   const [durationSec, setDurationSec] = useState(30 * 60);
   // Remaining time in milliseconds — drives both the readout and the ring.
   const [remainingMs, setRemainingMs] = useState(30 * 60 * 1000);
@@ -51,6 +55,10 @@ export default function Timer({ onTimeUpReset, onReset, onTick }: Props) {
   const [finished, setFinished] = useState(false);
   // Absolute wall-clock time (ms) the countdown should reach zero.
   const endRef = useRef(0);
+  // The rAF loop below only re-subscribes on `running`, so it would otherwise close
+  // over the onFinish prop from the render that started the run.
+  const onFinishRef = useRef(onFinish);
+  onFinishRef.current = onFinish;
 
   // Timestamp-driven countdown: compute remaining from a target end time on
   // every animation frame. Accurate (no setInterval drift) and smooth.
@@ -63,6 +71,7 @@ export default function Timer({ onTimeUpReset, onReset, onTick }: Props) {
         setRemainingMs(0);
         setRunning(false);
         setFinished(true);
+        onFinishRef.current?.();
         return;
       }
       setRemainingMs(remaining);

@@ -60,6 +60,7 @@ describe("mergeSettings (LWW)", () => {
     spotifyEnabled: true,
     showTasks: true,
     menubarTimer: true,
+    chime: false,
     updated_at: 1,
     ...over,
   });

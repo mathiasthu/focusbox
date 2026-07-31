@@ -4,6 +4,7 @@ import { ACCENTS, type AccentId } from "../lib/accent";
 import { SUPPORT_URL, SUPPORT_EMAIL, APP_VERSION } from "../lib/config";
 import { isSpotifyAvailable } from "../lib/spotify";
 import { isTrayAvailable } from "../lib/tray";
+import { playChime } from "../lib/chime";
 import AccountSync from "./AccountSync";
 import type { SyncController } from "../hooks/useSync";
 
@@ -61,6 +62,8 @@ interface Props {
   onShowTasksChange: (visible: boolean) => void;
   menubarTimer: boolean;
   onMenubarTimerChange: (visible: boolean) => void;
+  chime: boolean;
+  onChimeChange: (enabled: boolean) => void;
   sync: SyncController;
   demo: boolean;
 }
@@ -78,6 +81,8 @@ export default function Settings({
   onShowTasksChange,
   menubarTimer,
   onMenubarTimerChange,
+  chime,
+  onChimeChange,
   sync,
   demo,
 }: Props) {
@@ -159,6 +164,31 @@ export default function Settings({
               className={`segmented__opt${!showTasks ? " segmented__opt--active" : ""}`}
               aria-pressed={!showTasks}
               onClick={() => onShowTasksChange(false)}
+            >
+              Off
+            </button>
+          </div>
+        </div>
+
+        <div className="setting">
+          <span className="setting__label">Timer sound</span>
+          <div className="segmented" role="group" aria-label="Timer sound">
+            <button
+              type="button"
+              className={`segmented__opt${chime ? " segmented__opt--active" : ""}`}
+              aria-pressed={chime}
+              onClick={() => {
+                onChimeChange(true);
+                playChime(); // preview, so the choice is audible right away
+              }}
+            >
+              On
+            </button>
+            <button
+              type="button"
+              className={`segmented__opt${!chime ? " segmented__opt--active" : ""}`}
+              aria-pressed={!chime}
+              onClick={() => onChimeChange(false)}
             >
               Off
             </button>
