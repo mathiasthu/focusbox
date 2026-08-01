@@ -36,6 +36,17 @@ pub fn run() {
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
+    // Launch at login: desktop-only, and OFF until the user turns it on in Settings —
+    // registering the plugin only makes the enable/disable/is-enabled commands available,
+    // it doesn't register the app with the OS. macOS uses a LaunchAgent plist (works
+    // wherever the .app lives, unlike the AppleScript login-items route); Windows uses
+    // the HKCU Run key. No extra launch args: a boot launch is an ordinary launch.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        None,
+    ));
+
     builder
         .invoke_handler(tauri::generate_handler![
             spotify::spotify_control,

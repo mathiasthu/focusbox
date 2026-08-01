@@ -4,6 +4,7 @@ import { ACCENTS, type AccentId } from "../lib/accent";
 import { SUPPORT_URL, SUPPORT_EMAIL, APP_VERSION } from "../lib/config";
 import { isSpotifyAvailable } from "../lib/spotify";
 import { isTrayAvailable } from "../lib/tray";
+import { isAutostartAvailable } from "../lib/autostart";
 import { playChime, SOUNDS, type SoundId } from "../lib/chime";
 import AccountSync from "./AccountSync";
 import type { SyncController } from "../hooks/useSync";
@@ -66,6 +67,8 @@ interface Props {
   onChimeChange: (enabled: boolean) => void;
   chimeSound: SoundId;
   onChimeSoundChange: (id: SoundId) => void;
+  autostart: boolean;
+  onAutostartChange: (enabled: boolean) => void;
   sync: SyncController;
   demo: boolean;
 }
@@ -87,6 +90,8 @@ export default function Settings({
   onChimeChange,
   chimeSound,
   onChimeSoundChange,
+  autostart,
+  onAutostartChange,
   sync,
   demo,
 }: Props) {
@@ -245,6 +250,37 @@ export default function Settings({
                 Off
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Desktop only. Unlike the rows above, this one isn't synced — it registers
+            a login item on THIS machine (see autostart.ts), hence the hint. */}
+        {isAutostartAvailable && (
+          <div className="setting setting--col">
+            <div className="setting__row">
+              <span className="setting__label">Start on login</span>
+              <div className="segmented" role="group" aria-label="Start on login">
+                <button
+                  type="button"
+                  className={`segmented__opt${autostart ? " segmented__opt--active" : ""}`}
+                  aria-pressed={autostart}
+                  onClick={() => onAutostartChange(true)}
+                >
+                  On
+                </button>
+                <button
+                  type="button"
+                  className={`segmented__opt${!autostart ? " segmented__opt--active" : ""}`}
+                  aria-pressed={!autostart}
+                  onClick={() => onAutostartChange(false)}
+                >
+                  Off
+                </button>
+              </div>
+            </div>
+            <span className="setting__hint">
+              Opens Focusbox when you sign in to this computer. Applies to this device only.
+            </span>
           </div>
         )}
 

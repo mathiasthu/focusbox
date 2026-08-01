@@ -39,6 +39,11 @@ import {
   type SoundId,
 } from "./lib/chime";
 import { initTray, setTrayTitle, destroyTray, trayTitleFor, isTrayAvailable } from "./lib/tray";
+import {
+  getAutostartEnabled,
+  setAutostartEnabled,
+  isAutostartAvailable,
+} from "./lib/autostart";
 import { isDemo } from "./lib/demo";
 
 export default function App() {
@@ -54,6 +59,9 @@ export default function App() {
   const [menubarTimer, setMenubarTimer] = useState<boolean>(getMenubarTimer);
   const [chime, setChime] = useState<boolean>(getChime);
   const [chimeSound, setChimeSound] = useState<SoundId>(getChimeSound);
+  // Launch at login. Not persisted or synced — the OS registration is the state,
+  // so this is hydrated from the OS on mount (see the effect below).
+  const [autostart, setAutostart] = useState(false);
   // Latest tray display string, derived from Timer's onTick — null means "icon only".
   const [trayText, setTrayText] = useState<string | null>(null);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
@@ -159,6 +167,20 @@ export default function App() {
   useEffect(() => {
     storeChimeSound(chimeSound);
   }, [chimeSound]);
+
+  // Read the real login-item state once on mount (no-op off-desktop, where the
+  // toggle isn't rendered anyway). Nothing writes here — if the user removed the
+  // login item outside the app, the toggle reflects that rather than re-adding it.
+  useEffect(() => {
+    if (!isAutostartAvailable) return;
+    let active = true;
+    getAutostartEnabled().then((on) => {
+      if (active) setAutostart(on);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Create/destroy the macOS tray item as the setting is toggled (no-op off-mac/web).
   useEffect(() => {
@@ -299,6 +321,12 @@ export default function App() {
     setChimeSound(id);
     sync.notifySettingsChanged(Date.now());
   }
+  // Not synced (see autostart.ts): write to the OS and adopt whatever it ends up
+  // with, so a failed registration doesn't leave the toggle showing a lie.
+  function changeAutostart(enabled: boolean) {
+    setAutostart(enabled); // optimistic — the write is fast but not instant
+    void setAutostartEnabled(enabled).then(setAutostart);
+  }
 
   // Timer tick/status -> tray display string (running "mm:ss" / paused frozen /
   // finished "0:00" / idle icon-only). Cheap to call every tick; setTrayTitle itself
@@ -406,6 +434,8 @@ export default function App() {
         onChimeChange={changeChime}
         chimeSound={chimeSound}
         onChimeSoundChange={changeChimeSound}
+        autostart={autostart}
+        onAutostartChange={changeAutostart}
         sync={sync}
         demo={demo}
       />

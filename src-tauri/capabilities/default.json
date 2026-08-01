@@ -19,6 +19,7 @@
       ]
     },
     "updater:default",
+    "autostart:default",
     "process:default",
     "window-state:default",
     "core:window:allow-show",

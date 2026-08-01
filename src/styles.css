@@ -350,6 +350,15 @@ body::after {
   align-items: flex-start;
   gap: 10px;
 }
+/* Label + control on one line inside a .setting--col, so a hint can sit under
+   them instead of beside them. */
+.setting__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+}
 .setting__label {
   font-size: 14.5px;
   font-weight: 600;
