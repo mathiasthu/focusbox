@@ -1,4 +1,4 @@
-import { load, type Store } from "@tauri-apps/plugin-store";
+import { invoke } from "@tauri-apps/api/core";
 import type { SyncedTask } from "./syncTypes";
 import { migrateTasks } from "./taskMap";
 import { isDemo, demoTasks, demoNotesDoc } from "./demo";
@@ -13,23 +13,56 @@ export interface AppState {
   notesDoc: NotesDoc;
 }
 
-const FILE = "focusbox.json";
 const LS_KEY = "focusbox-state";
 
 // True inside the Tauri webview; false in a plain browser (dev preview).
 export const isTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-let storePromise: Promise<Store> | null = null;
+// --- the app's key/value store (focusbox.json), via app-defined Rust commands ---
+//
+// `tauri-plugin-store` used to back this. It was dropped because its commands take the
+// store's file path from the caller and it has no path-scope facility, which made
+// `store:default` an arbitrary-path JSON read/write primitive for anything running in the
+// webview — see the header of src-tauri/src/appstore.rs. The commands here hardcode the
+// filename in Rust, so the webview never names a path at all. The file format is
+// unchanged, so existing installs load as-is.
 
-/** The shared plugin-store instance (focusbox.json). Reused by syncStore so both
- * write to the same file without a second handle. */
-export function getStore(): Promise<Store> {
-  if (!storePromise) {
-    // autoSave off — we control persistence via the debounced flush below.
-    storePromise = load(FILE, { defaults: {}, autoSave: false });
+let cache: Record<string, unknown> | null = null;
+let inflight: Promise<Record<string, unknown>> | null = null;
+
+/** The whole store, read once per launch and kept in memory (every write below keeps the
+ * cache in step, and nothing outside this process writes the file). */
+async function readAll(): Promise<Record<string, unknown>> {
+  if (cache) return cache;
+  if (!inflight) {
+    inflight = invoke<Record<string, unknown> | null>("app_store_read")
+      .then((v) => {
+        cache = v ?? {};
+        return cache;
+      })
+      .finally(() => {
+        inflight = null;
+      });
   }
-  return storePromise;
+  return inflight;
+}
+
+export async function storeGet<T>(key: string): Promise<T | undefined> {
+  return (await readAll())[key] as T | undefined;
+}
+
+/** Merge keys into the store and persist. Rejects if the write fails — callers that can
+ * tolerate that decide so explicitly. */
+export async function storeSet(patch: Record<string, unknown>): Promise<void> {
+  await invoke("app_store_write", { patch, remove: [] });
+  Object.assign(await readAll(), patch);
+}
+
+export async function storeRemove(...keys: string[]): Promise<void> {
+  await invoke("app_store_write", { patch: {}, remove: keys });
+  const c = await readAll();
+  for (const k of keys) delete c[k];
 }
 
 export async function loadState(): Promise<AppState> {
@@ -40,9 +73,8 @@ export async function loadState(): Promise<AppState> {
       return { tasks: demoTasks(), notesDoc: demoNotesDoc() };
     }
     if (isTauri) {
-      const store = await getStore();
-      const tasks = migrateTasks(await store.get("tasks"), now);
-      const notesDoc = (await store.get<NotesDoc>("notesDoc")) ?? null;
+      const tasks = migrateTasks(await storeGet("tasks"), now);
+      const notesDoc = (await storeGet<NotesDoc>("notesDoc")) ?? null;
       return { tasks, notesDoc };
     }
     const raw = localStorage.getItem(LS_KEY);
@@ -72,10 +104,10 @@ async function flush(): Promise<void> {
   pending = {};
   try {
     if (isTauri) {
-      const store = await getStore();
-      if ("tasks" in toWrite) await store.set("tasks", toWrite.tasks);
-      if ("notesDoc" in toWrite) await store.set("notesDoc", toWrite.notesDoc);
-      await store.save();
+      const patch: Record<string, unknown> = {};
+      if ("tasks" in toWrite) patch.tasks = toWrite.tasks;
+      if ("notesDoc" in toWrite) patch.notesDoc = toWrite.notesDoc;
+      if (Object.keys(patch).length > 0) await storeSet(patch);
       return;
     }
     // Browser fallback: merge into a single localStorage record.

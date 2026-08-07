@@ -40,8 +40,10 @@ describe("account key lifecycle", () => {
     );
     expect(unlocked.auth_hash).toBe(created.signup.auth_hash);
 
-    const blob = encryptBlob("hello notes", created.session.adk);
-    expect(decryptBlob(blob.ciphertext, blob.nonce, unlocked.session.adk)).toBe("hello notes");
+    const blob = encryptBlob("hello notes", created.session.adk, "notes");
+    expect(decryptBlob(blob.ciphertext, blob.nonce, unlocked.session.adk, "notes")).toBe(
+      "hello notes",
+    );
   });
 
   it("rejects a wrong password", async () => {
@@ -64,8 +66,8 @@ describe("account key lifecycle", () => {
     const restored = adkFromBase64(adkToBase64(c.session.adk));
     expect(sodium_equal(restored, c.session.adk)).toBe(true);
     // and the restored ADK still decrypts a blob made with the original
-    const blob = encryptBlob("after restart", c.session.adk);
-    expect(decryptBlob(blob.ciphertext, blob.nonce, restored)).toBe("after restart");
+    const blob = encryptBlob("after restart", c.session.adk, "notes");
+    expect(decryptBlob(blob.ciphertext, blob.nonce, restored, "notes")).toBe("after restart");
   });
 });
 
@@ -111,16 +113,16 @@ describe("recovery", () => {
 describe("integrity & isolation", () => {
   it("rejects a tampered blob", async () => {
     const c = await createAccount("t@b.com", "pw");
-    const blob = encryptBlob("secret", c.session.adk);
+    const blob = encryptBlob("secret", c.session.adk, "notes");
     const flipped = blob.ciphertext.endsWith("A") ? "B" : "A";
     const bad = blob.ciphertext.slice(0, -1) + flipped;
-    expect(() => decryptBlob(bad, blob.nonce, c.session.adk)).toThrow();
+    expect(() => decryptBlob(bad, blob.nonce, c.session.adk, "notes")).toThrow();
   });
 
   it("produces a unique nonce per encryption", async () => {
     const c = await createAccount("n@b.com", "pw");
-    const a = encryptBlob("x", c.session.adk);
-    const b = encryptBlob("x", c.session.adk);
+    const a = encryptBlob("x", c.session.adk, "notes");
+    const b = encryptBlob("x", c.session.adk, "notes");
     expect(a.nonce).not.toBe(b.nonce);
     expect(a.ciphertext).not.toBe(b.ciphertext);
   });

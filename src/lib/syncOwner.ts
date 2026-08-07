@@ -1,4 +1,4 @@
-import { getStore, isTauri } from "./store";
+import { isTauri, storeGet, storeSet } from "./store";
 import type { SyncedTask } from "./syncTypes";
 
 /**
@@ -79,8 +79,7 @@ export function normalizeOwnerRecord(raw: unknown): OwnerRecord | null {
  * the sign-in instead, and the user can retry. */
 export async function loadOwner(): Promise<OwnerRecord | null> {
   if (isTauri) {
-    const store = await getStore();
-    return normalizeOwnerRecord(await store.get<unknown>(STORE_KEY));
+    return normalizeOwnerRecord(await storeGet<unknown>(STORE_KEY));
   }
   const raw = localStorage.getItem(LS_KEY);
   return normalizeOwnerRecord(raw ? JSON.parse(raw) : null);
@@ -90,9 +89,7 @@ export async function saveOwner(r: OwnerRecord): Promise<void> {
   // Does NOT swallow errors: if the marker can't be written, the caller must not treat
   // the local data as claimed — a lost marker is what re-opens the cross-account leak.
   if (isTauri) {
-    const store = await getStore();
-    await store.set(STORE_KEY, r);
-    await store.save();
+    await storeSet({ [STORE_KEY]: r });
     return;
   }
   localStorage.setItem(LS_KEY, JSON.stringify(r));

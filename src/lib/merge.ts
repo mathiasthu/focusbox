@@ -22,13 +22,46 @@ export function mergeTasks(local: SyncedTask[], remote: SyncedTask[]): SyncedTas
   );
 }
 
-/** Last-write-wins; ties keep local. */
+/**
+ * Last-write-wins. A timestamp tie is broken on content, NOT on "keep local".
+ *
+ * "Keep local" is not commutative: two devices holding different settings at the same
+ * `updated_at` each decide their own copy won, each pushes it, and each then sees the
+ * other's — a ping-pong with no fixed point. Ordering by serialized content makes both
+ * devices pick the same side and converge on the next cycle.
+ */
 export function mergeSettings(local: SettingsValue, remote: SettingsValue): SettingsValue {
-  return remote.updated_at > local.updated_at ? remote : local;
+  if (remote.updated_at !== local.updated_at) {
+    return remote.updated_at > local.updated_at ? remote : local;
+  }
+  const l = JSON.stringify(local);
+  const r = JSON.stringify(remote);
+  return r > l ? remote : local;
 }
 
 export function sameDoc(a: NotesValue, b: NotesValue): boolean {
-  return JSON.stringify(a.doc) === JSON.stringify(b.doc);
+  return JSON.stringify(a.doc ?? null) === JSON.stringify(b.doc ?? null);
+}
+
+/**
+ * Does this side actually carry a note?
+ *
+ * `=== null` is not enough. A value whose `doc` key is MISSING (so `doc` reads back as
+ * `undefined`) is just as empty, and it arrives in practice: any object that isn't a
+ * NotesValue — a settings blob a hostile server misrouted onto the notes key, a
+ * hand-edited state file, a blob from a future schema — deserializes into exactly that
+ * shape. A `=== null` test lets such a value through the emptiness guards, win LWW on
+ * timestamp, and then get pushed back with `JSON.stringify` silently dropping the
+ * undefined key — a validly-signed, doc-less note that wipes every device.
+ */
+export function hasDoc(v: NotesValue): boolean {
+  return v.doc !== null && v.doc !== undefined;
+}
+
+/** A doc-less value normalized to an explicit `null` doc, so it can never be serialized
+ * as an object with the `doc` key missing entirely. */
+function withNullDoc(v: NotesValue): NotesValue {
+  return hasDoc(v) ? v : { ...v, doc: null };
 }
 
 export interface NotesResolution {
@@ -47,13 +80,17 @@ export function resolveNotes(
   remote: NotesValue,
   baseUpdatedAt: number | null,
 ): NotesResolution {
-  // Universal invariant: an empty (null) doc has nothing to preserve and must NEVER
-  // overwrite a real doc on the other side. This both (a) stops a fresh device from
-  // spawning a junk conflict copy when it first pulls real notes, and (b) stops a
-  // wiped/corrupt local cache from destroying the synced notes on the server. Applies
-  // regardless of timestamps/baseline.
-  if (local.doc === null && remote.doc !== null) return { current: remote };
-  if (remote.doc === null && local.doc !== null) return { current: local };
+  // Universal invariant: an empty doc has nothing to preserve and must NEVER overwrite a
+  // real doc on the other side. This both (a) stops a fresh device from spawning a junk
+  // conflict copy when it first pulls real notes, and (b) stops a wiped/corrupt local
+  // cache — or a misrouted server response — from destroying the synced notes. Applies
+  // regardless of timestamps/baseline. Emptiness is `hasDoc`, NOT `=== null`: see there.
+  if (!hasDoc(local) && hasDoc(remote)) return { current: remote };
+  if (!hasDoc(remote) && hasDoc(local)) return { current: local };
+  // Neither side has a doc: settle on one, but hand back an explicit null.
+  if (!hasDoc(local) && !hasDoc(remote)) {
+    return { current: withNullDoc(remote.updated_at > local.updated_at ? remote : local) };
+  }
 
   const localChanged = baseUpdatedAt === null ? true : local.updated_at > baseUpdatedAt;
   const remoteChanged = baseUpdatedAt === null ? true : remote.updated_at > baseUpdatedAt;

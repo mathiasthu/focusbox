@@ -1,4 +1,4 @@
-import { getStore, isTauri } from "./store";
+import { isTauri, storeGet, storeRemove, storeSet } from "./store";
 import { emptySyncState, type SyncState } from "./sync";
 
 /**
@@ -24,8 +24,7 @@ const LS_KEY = "focusbox-sync"; // browser fallback
 export async function loadSync(): Promise<SyncPersist | null> {
   try {
     if (isTauri) {
-      const store = await getStore();
-      return (await store.get<SyncPersist>(STORE_KEY)) ?? null;
+      return (await storeGet<SyncPersist>(STORE_KEY)) ?? null;
     }
     const raw = localStorage.getItem(LS_KEY);
     return raw ? (JSON.parse(raw) as SyncPersist) : null;
@@ -39,9 +38,7 @@ export async function saveSync(p: SyncPersist): Promise<void> {
   // Deliberately does NOT swallow errors: a failed write must be visible to the
   // caller so a sync isn't reported as durable when the on-disk state wasn't saved.
   if (isTauri) {
-    const store = await getStore();
-    await store.set(STORE_KEY, p);
-    await store.save();
+    await storeSet({ [STORE_KEY]: p });
     return;
   }
   localStorage.setItem(LS_KEY, JSON.stringify(p));
@@ -50,9 +47,7 @@ export async function saveSync(p: SyncPersist): Promise<void> {
 export async function clearSync(): Promise<void> {
   try {
     if (isTauri) {
-      const store = await getStore();
-      await store.delete(STORE_KEY);
-      await store.save();
+      await storeRemove(STORE_KEY);
       return;
     }
     localStorage.removeItem(LS_KEY);
@@ -61,7 +56,9 @@ export async function clearSync(): Promise<void> {
   }
 }
 
-/** A stable per-device id used to label pushes + scope notes-conflict keys. */
+/** A stable per-device id. Device-LOCAL only: it is no longer attached to pushes or
+ * embedded in conflict-copy keys, because a stable UUID on every write let the server
+ * assemble a per-device activity timeline out of plaintext metadata. */
 export function newDeviceId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;

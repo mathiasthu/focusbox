@@ -4,13 +4,15 @@ import {
   KEY_NOTES,
   KEY_SETTINGS,
   KEY_TASKS,
-  notesConflictKey,
+  VERSIONED_KEYS,
+  clampStamp,
+  newNotesConflictKey,
   type NotesValue,
   type SettingsValue,
   type SyncedTask,
   type TasksBlob,
 } from "./syncTypes";
-import { ConflictError, type SyncApi } from "./api";
+import { ApiError, ConflictError, type SyncApi } from "./api";
 
 export interface LocalData {
   tasks: SyncedTask[];
@@ -37,18 +39,27 @@ export interface SyncResult {
 
 const MAX_CONFLICT_RETRIES = 4;
 
+/** Raised when the server's framing contradicts what this client already knows to be
+ * true. Not a transport error and not retryable: the response is well-formed, it just
+ * cannot have come from an honest server holding this account's data. */
+export class SyncIntegrityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SyncIntegrityError";
+  }
+}
+
 function stableEq(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-/** Coerce a numeric field to a finite number (defends the merge from a NaN/garbage
- * value in a remote blob — blobs are authenticated, so this only guards client bugs). */
+/** Non-timestamp numeric field: finite, but no clamp (ordering has no clock semantics). */
 function finite(n: unknown, fallback: number): number {
   return typeof n === "number" && Number.isFinite(n) ? n : fallback;
 }
 
-function normalizeTask(t: SyncedTask): SyncedTask {
-  return { ...t, updated_at: finite(t.updated_at, 0), order: finite(t.order, 0) };
+function normalizeTask(t: SyncedTask, now: number): SyncedTask {
+  return { ...t, updated_at: clampStamp(t.updated_at, 0, now), order: finite(t.order, 0) };
 }
 
 async function pull<T>(
@@ -58,7 +69,15 @@ async function pull<T>(
   key: string,
 ): Promise<{ value: T; version: number }> {
   const blob = await api.getBlob(token, key);
-  const plain = decryptBlob(blob.ciphertext, blob.nonce, adk);
+  // The server does not get to decide which blob this is. A response labelled with a
+  // different key than the one requested is a misroute — the precondition for serving
+  // one blob's ciphertext as another's. (The AEAD binding in decryptBlob is the check
+  // that actually holds against a lying server; this catches the honest-server bug
+  // and reports it as what it is.)
+  if (blob.key !== key) {
+    throw new SyncIntegrityError(`sync server answered "${key}" with blob "${blob.key}"`);
+  }
+  const plain = decryptBlob(blob.ciphertext, blob.nonce, adk, key);
   return { value: JSON.parse(plain) as T, version: blob.version };
 }
 
@@ -69,17 +88,52 @@ async function pushValue(
   key: string,
   value: unknown,
   baseVersion: number,
-  deviceId: string,
 ): Promise<number> {
-  const { ciphertext, nonce } = encryptBlob(JSON.stringify(value), adk);
+  const { ciphertext, nonce } = encryptBlob(JSON.stringify(value), adk, key);
   const res = await api.pushBlob(token, {
     key,
     ciphertext,
     nonce,
     base_version: baseVersion,
-    device_id: deviceId,
   });
   return res.version;
+}
+
+/**
+ * The server's claimed version for `key`, rejected if it moved backwards.
+ *
+ * `state.versions` was written on every cycle and read exactly once — to fill in
+ * `base_version` for the *server* to check, which is worth nothing when the server is the
+ * adversary. Checking it here is what makes it a real defense: a rollback (an old
+ * ciphertext replayed, or the blob dropped entirely) can no longer be presented as the
+ * current state and merged in as though the user's later edits never happened.
+ */
+function serverVersionFor(
+  key: string,
+  manifest: Map<string, number>,
+  known: Record<string, number>,
+): number {
+  const claimed = manifest.get(key) ?? 0;
+  const persisted = known[key] ?? 0;
+  if (claimed < persisted) {
+    throw new SyncIntegrityError(
+      `sync server rolled "${key}" back from version ${persisted} to ${claimed}`,
+    );
+  }
+  return claimed;
+}
+
+/** A conflict copy is a best-effort safety net, never the point of the cycle. A server
+ * that refuses the write (quota 413, copy cap, …) must not abort the sync that is about
+ * to preserve the user's actual note — but a network/5xx failure still propagates, so
+ * the normal retry path sees it. */
+function tolerateConflictCopyFailure(e: unknown): void {
+  if (e instanceof ConflictError) return;
+  if (e instanceof ApiError && e.status < 500) {
+    console.warn("Focusbox: couldn't save a notes backup copy; continuing.", e);
+    return;
+  }
+  throw e;
 }
 
 /** Sync one full cycle: pull changed blobs, merge, push local contributions. */
@@ -89,9 +143,10 @@ export async function syncOnce(opts: {
   adk: Uint8Array;
   local: LocalData;
   state: SyncState;
-  deviceId: string;
+  /** this device's clock, for the remote-timestamp skew clamp */
+  now: number;
 }): Promise<SyncResult> {
-  const { api, token, adk, deviceId } = opts;
+  const { api, token, adk, now } = opts;
   const local: LocalData = { ...opts.local };
   const state: SyncState = {
     versions: { ...opts.state.versions },
@@ -101,16 +156,19 @@ export async function syncOnce(opts: {
 
   const manifest = await api.getManifest(token);
   const mv = new Map(manifest.map((m) => [m.key, m.version]));
+  // Check every versioned key up front, so a rollback aborts before any blob is merged
+  // or pushed rather than after the first one has already been applied.
+  for (const k of VERSIONED_KEYS) serverVersionFor(k, mv, opts.state.versions);
 
   // ---- tasks: per-item LWW union ----
   {
-    let serverV = mv.get(KEY_TASKS) ?? 0;
+    let serverV = serverVersionFor(KEY_TASKS, mv, opts.state.versions);
     for (let attempt = 0; attempt < MAX_CONFLICT_RETRIES; attempt++) {
       let remote: SyncedTask[] = [];
       let baseV = 0;
       if (serverV > 0) {
         const pr = await pull<TasksBlob>(api, token, adk, KEY_TASKS);
-        remote = (pr.value.items ?? []).map(normalizeTask);
+        remote = (pr.value.items ?? []).map((t) => normalizeTask(t, now));
         baseV = pr.version;
       }
       const merged = mergeTasks(local.tasks, remote);
@@ -120,7 +178,7 @@ export async function syncOnce(opts: {
         break;
       }
       try {
-        const v = await pushValue(api, token, adk, KEY_TASKS, { items: merged } as TasksBlob, baseV, deviceId);
+        const v = await pushValue(api, token, adk, KEY_TASKS, { items: merged } as TasksBlob, baseV);
         local.tasks = merged;
         state.versions[KEY_TASKS] = v;
         break;
@@ -136,13 +194,13 @@ export async function syncOnce(opts: {
 
   // ---- settings: LWW ----
   {
-    let serverV = mv.get(KEY_SETTINGS) ?? 0;
+    let serverV = serverVersionFor(KEY_SETTINGS, mv, opts.state.versions);
     for (let attempt = 0; attempt < MAX_CONFLICT_RETRIES; attempt++) {
       let remote: SettingsValue | null = null;
       let baseV = 0;
       if (serverV > 0) {
         const pr = await pull<SettingsValue>(api, token, adk, KEY_SETTINGS);
-        remote = { ...pr.value, updated_at: finite(pr.value.updated_at, 0) };
+        remote = { ...pr.value, updated_at: clampStamp(pr.value.updated_at, 0, now) };
         baseV = pr.version;
       }
       const merged = remote ? mergeSettings(local.settings, remote) : local.settings;
@@ -152,7 +210,7 @@ export async function syncOnce(opts: {
         break;
       }
       try {
-        const v = await pushValue(api, token, adk, KEY_SETTINGS, merged, baseV, deviceId);
+        const v = await pushValue(api, token, adk, KEY_SETTINGS, merged, baseV);
         local.settings = merged;
         state.versions[KEY_SETTINGS] = v;
         break;
@@ -168,31 +226,32 @@ export async function syncOnce(opts: {
 
   // ---- notes: LWW with conflict-copy ----
   {
-    let serverV = mv.get(KEY_NOTES) ?? 0;
+    let serverV = serverVersionFor(KEY_NOTES, mv, opts.state.versions);
     for (let attempt = 0; attempt < MAX_CONFLICT_RETRIES; attempt++) {
       let remote: NotesValue | null = null;
       let baseV = 0;
       if (serverV > 0) {
         const pr = await pull<NotesValue>(api, token, adk, KEY_NOTES);
-        remote = { ...pr.value, updated_at: finite(pr.value.updated_at, 0) };
+        remote = { ...pr.value, updated_at: clampStamp(pr.value.updated_at, 0, now) };
         baseV = pr.version;
       }
       if (!remote) {
         // No server notes yet: establish it from local.
-        const v = await pushValue(api, token, adk, KEY_NOTES, local.notes, 0, deviceId);
+        const v = await pushValue(api, token, adk, KEY_NOTES, local.notes, 0);
         state.versions[KEY_NOTES] = v;
         state.notesBaseUpdatedAt = local.notes.updated_at;
         break;
       }
       const res = resolveNotes(local.notes, remote, state.notesBaseUpdatedAt);
       if (res.conflict) {
-        const ckey = notesConflictKey(`${deviceId}-${res.conflict.updated_at}`);
-        // best-effort: a colliding conflict key (already present) is harmless
+        const ckey = newNotesConflictKey();
+        // best-effort: never let a failed backup copy abort the cycle that preserves
+        // the note the user actually kept
         try {
-          await pushValue(api, token, adk, ckey, res.conflict, 0, deviceId);
+          await pushValue(api, token, adk, ckey, res.conflict, 0);
           conflicts.push(ckey);
         } catch (e) {
-          if (!(e instanceof ConflictError)) throw e;
+          tolerateConflictCopyFailure(e);
         }
       }
       if (stableEq(res.current, remote)) {
@@ -202,7 +261,7 @@ export async function syncOnce(opts: {
         break;
       }
       try {
-        const v = await pushValue(api, token, adk, KEY_NOTES, res.current, baseV, deviceId);
+        const v = await pushValue(api, token, adk, KEY_NOTES, res.current, baseV);
         local.notes = res.current;
         state.versions[KEY_NOTES] = v;
         state.notesBaseUpdatedAt = res.current.updated_at;

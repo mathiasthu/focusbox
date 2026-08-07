@@ -14,12 +14,12 @@ class FakeApi implements SyncApi {
   blobs = new Map<string, { ciphertext: string; nonce: string; version: number }>();
   constructor(private adk: Uint8Array) {}
   put(key: string, value: NotesValue) {
-    const { ciphertext, nonce } = encryptBlob(JSON.stringify(value), this.adk);
+    const { ciphertext, nonce } = encryptBlob(JSON.stringify(value), this.adk, key);
     this.blobs.set(key, { ciphertext, nonce, version: 1 });
   }
   read(key: string): NotesValue {
     const b = this.blobs.get(key)!;
-    return JSON.parse(decryptBlob(b.ciphertext, b.nonce, this.adk)) as NotesValue;
+    return JSON.parse(decryptBlob(b.ciphertext, b.nonce, this.adk, key)) as NotesValue;
   }
   async getManifest(): Promise<ManifestEntry[]> {
     return [...this.blobs.entries()].map(([key, b]) => ({
@@ -58,7 +58,7 @@ beforeAll(async () => {
 });
 
 describe("conflicts", () => {
-  it("lists only conflict keys, newest first, with device parsed", async () => {
+  it("lists only conflict keys, newest first, reading legacy timestamps from the key", async () => {
     const api = new FakeApi(adk);
     api.put("notes_conflict:devX-2000", { doc: { x: 1 }, updated_at: 2000 });
     api.put("notes_conflict:devY-3000", { doc: { y: 1 }, updated_at: 3000 });
@@ -68,8 +68,42 @@ describe("conflicts", () => {
       "notes_conflict:devY-3000",
       "notes_conflict:devX-2000",
     ]);
-    expect(list[0].deviceId).toBe("devY");
     expect(list[0].updatedAt).toBe(3000);
+  });
+
+  it("no longer publishes a device id, and mints opaque keys for new copies", async () => {
+    // The old key shape, `notes_conflict:<deviceUUID>-<epochMs>`, handed the server a
+    // stable per-device identifier and a millisecond edit timestamp in the clear on every
+    // conflict — a per-device activity timeline assembled from key names alone. New keys
+    // carry nothing; the display time comes from the manifest's own updated_at.
+    const api = new FakeApi(adk);
+    api.put("notes_conflict:devX-2000", { doc: { x: 1 }, updated_at: 2000 });
+    const list = await listConflicts(api, "tok");
+    expect(list[0]).not.toHaveProperty("deviceId");
+
+    await restoreConflict({
+      api,
+      token: "tok",
+      adk,
+      key: "notes_conflict:devX-2000",
+      current: { doc: { cur: 1 }, updated_at: 5000 },
+      now: 9000,
+    });
+    const [backup] = api.conflictKeys();
+    expect(backup.startsWith("notes_conflict:")).toBe(true);
+    const suffix = backup.slice("notes_conflict:".length);
+    expect(suffix).not.toContain("-");
+    expect(suffix).not.toMatch(/\d{10,}/); // no epoch-ms timestamp
+  });
+
+  it("refuses a blob the server labelled with a different key", async () => {
+    const api = new FakeApi(adk);
+    api.put("notes_conflict:d-1", { doc: { c: 1 }, updated_at: 1 });
+    const original = api.getBlob.bind(api);
+    api.getBlob = async (t: string, key: string) => ({ ...(await original(t, key)), key: "notes" });
+    await expect(getConflict(api, "tok", adk, "notes_conflict:d-1")).rejects.toThrow(
+      /answered .* with blob/,
+    );
   });
 
   it("decrypts a conflict copy", async () => {
@@ -87,7 +121,6 @@ describe("conflicts", () => {
       api,
       token: "tok",
       adk,
-      deviceId: "devR",
       key: "notes_conflict:d-1000",
       current,
       now: 9000,
@@ -107,7 +140,6 @@ describe("conflicts", () => {
       api,
       token: "tok",
       adk,
-      deviceId: "devR",
       key: "notes_conflict:d-1",
       current: { doc: null, updated_at: 0 },
       now: 9000,

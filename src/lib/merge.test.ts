@@ -70,11 +70,21 @@ describe("mergeSettings (LWW)", () => {
       mergeSettings(s({ accent: "old", updated_at: 1 }), s({ accent: "new", updated_at: 2 })).accent,
     ).toBe("new");
   });
-  it("ties keep local", () => {
-    expect(
-      mergeSettings(s({ accent: "local", updated_at: 5 }), s({ accent: "remote", updated_at: 5 }))
-        .accent,
-    ).toBe("local");
+  it("breaks a timestamp tie the same way from both sides", () => {
+    // "Ties keep local" is not commutative: two devices holding different settings at the
+    // same updated_at each conclude their own copy won, each pushes it, and they ping-pong
+    // with no fixed point. Ordering on content makes both pick the same side.
+    const a = s({ accent: "aaa", updated_at: 5 });
+    const b = s({ accent: "zzz", updated_at: 5 });
+    expect(mergeSettings(a, b).accent).toBe(mergeSettings(b, a).accent);
+  });
+
+  it("is idempotent on a tie (a second merge doesn't flip back)", () => {
+    const a = s({ accent: "aaa", updated_at: 5 });
+    const b = s({ accent: "zzz", updated_at: 5 });
+    const once = mergeSettings(a, b);
+    expect(mergeSettings(once, a)).toEqual(once);
+    expect(mergeSettings(once, b)).toEqual(once);
   });
 });
 

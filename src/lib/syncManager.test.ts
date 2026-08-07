@@ -113,13 +113,29 @@ class FakeBackend implements SyncApi, AuthApi, BillingApi {
     new_auth_hash: string;
     new_wrapped_adk: string;
     kdf_params: unknown;
+    new_recovery_wrapped_adk?: string;
+    new_recovery_auth_hash?: string;
   }): Promise<Tokens> {
     const u = this.users.get(body.email);
     if (!u || u.recovery_auth_hash !== body.recovery_auth_hash) throw new UnauthorizedError();
     u.auth_hash = body.new_auth_hash;
     u.wrapped_adk = body.new_wrapped_adk;
     u.kdf_params = body.kdf_params;
+    // Mirrors the server: both replacement fields move together or neither does.
+    if (body.new_recovery_wrapped_adk && body.new_recovery_auth_hash) {
+      u.recovery_wrapped_adk = body.new_recovery_wrapped_adk;
+      u.recovery_auth_hash = body.new_recovery_auth_hash;
+    }
     return { access_token: this.mk("access", body.email), refresh_token: this.mk("refresh", body.email), token_type: "bearer" };
+  }
+  async rotateRecovery(
+    token: string,
+    body: { recovery_wrapped_adk: string; recovery_auth_hash: string },
+  ): Promise<void> {
+    const email = this.auth(token);
+    const u = this.users.get(email)!;
+    u.recovery_wrapped_adk = body.recovery_wrapped_adk;
+    u.recovery_auth_hash = body.recovery_auth_hash;
   }
   async getManifest(token: string): Promise<ManifestEntry[]> {
     if (this.gate) await this.gate;
@@ -958,5 +974,244 @@ describe("SyncManager — restore after a sign-in swap", () => {
     const c = makeDevice(api, "C");
     await c.mgr.login("bob@example.com", "pw");
     expect(c.local.notesDoc).toEqual({ v: "restored" }); // and not reverted on the server
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Audit follow-ups: the set-aside data is now visible and recoverable (M1), the
+// ownership marker is established on every startup path (L7), and the recovery
+// key can be replaced (M3).
+// ---------------------------------------------------------------------------
+
+describe("SyncManager — set-aside data is visible and restorable (M1)", () => {
+  it("delete-account then a new signup lists the old data instead of silently dropping it", async () => {
+    // The reported shape of the bug: deleteAccount() calls logout(), which deliberately
+    // leaves owner.tag pointing at the now-deleted account. The next account created here
+    // is a tag mismatch, so the user's own tasks and notes are stashed and the app is
+    // handed {tasks: [], notesDoc: null}. There was no in-app route back — the stash key
+    // is the owner tag of an account whose server record is gone, and re-registering the
+    // same email mints a fresh ADK and therefore a different tag.
+    const api = new FakeBackend();
+    const install = makeInstall({ tasks: [task("mine-1")], notesDoc: { v: "my notes" } });
+    const a = makeDevice(api, "A", undefined, undefined, install);
+    await a.mgr.signup("me@example.com", "pw");
+    await a.mgr.deleteAccount();
+
+    const b = makeDevice(api, "B", undefined, undefined, install);
+    await b.mgr.signup("me@example.com", "pw"); // same email, brand new account
+    expect(install.state.tasks.filter((t) => !t.deleted)).toEqual([]); // app looks empty…
+
+    const snap = b.mgr.snapshot();
+    expect(snap.dataSetAsideThisSession).toBe(true); // …and says so
+    expect(snap.stashedOwners).toHaveLength(1);
+    expect(snap.stashedOwners[0].taskCount).toBe(1);
+    expect(snap.stashedOwners[0].notePreview).toBe("");
+  });
+
+  it("restoreStash brings the data back and pushes it to the signed-in account", async () => {
+    const api = new FakeBackend();
+    const install = makeInstall({ tasks: [task("mine-1")], notesDoc: { v: "my notes" } });
+    const a = makeDevice(api, "A", undefined, undefined, install);
+    await a.mgr.signup("me@example.com", "pw");
+    await a.mgr.deleteAccount();
+
+    const b = makeDevice(api, "B", undefined, undefined, install);
+    await b.mgr.signup("me@example.com", "pw");
+    const [stashed] = b.mgr.snapshot().stashedOwners;
+
+    await b.mgr.restoreStash(stashed.tag);
+    expect(install.state.tasks.filter((t) => !t.deleted).map((t) => t.id)).toEqual(["mine-1"]);
+    expect(install.state.notesDoc).toEqual({ v: "my notes" });
+    expect(b.mgr.snapshot().dataSetAsideThisSession).toBe(false);
+
+    // It reaches the cloud, so another device sees it too.
+    await b.mgr.syncNow();
+    const c = makeDevice(api, "C");
+    await c.mgr.login("me@example.com", "pw");
+    expect(c.local.tasks.filter((t) => !t.deleted).map((t) => t.id)).toEqual(["mine-1"]);
+    expect(c.local.notesDoc).toEqual({ v: "my notes" });
+  });
+
+  it("restoreStash parks the current data so the swap is reversible", async () => {
+    const api = new FakeBackend();
+    const install = makeInstall({ tasks: [task("alice-1")] });
+    const a = makeDevice(api, "A", undefined, undefined, install);
+    await a.mgr.signup("alice@example.com", "pw");
+    await a.mgr.logout();
+
+    const b = makeDevice(api, "B", undefined, undefined, install);
+    await b.mgr.signup("bob@example.com", "pw");
+    install.state.tasks = [task("bob-1")];
+    b.mgr.notifyTasksChanged(); // a real user edit; the app's state is live again
+
+    const [alice] = b.mgr.snapshot().stashedOwners;
+    await b.mgr.restoreStash(alice.tag);
+    expect(install.state.tasks.map((t) => t.id)).toEqual(["alice-1"]);
+
+    // Bob's data went into the stash rather than being discarded.
+    const [bob] = b.mgr.snapshot().stashedOwners;
+    expect(bob).toBeDefined();
+    await b.mgr.restoreStash(bob.tag);
+    expect(install.state.tasks.map((t) => t.id)).toEqual(["bob-1"]);
+  });
+
+  it("discardStash removes an entry permanently", async () => {
+    const api = new FakeBackend();
+    const install = makeInstall({ tasks: [task("alice-1")] });
+    const a = makeDevice(api, "A", undefined, undefined, install);
+    await a.mgr.signup("alice@example.com", "pw");
+    await a.mgr.logout();
+
+    const b = makeDevice(api, "B", undefined, undefined, install);
+    await b.mgr.signup("bob@example.com", "pw");
+    const [alice] = b.mgr.snapshot().stashedOwners;
+    await b.mgr.discardStash(alice.tag);
+    expect(b.mgr.snapshot().stashedOwners).toEqual([]);
+  });
+
+  it("deleteAccount(alsoEraseLocal) clears the working data and every stash", async () => {
+    const api = new FakeBackend();
+    const install = makeInstall({ tasks: [task("alice-1")] });
+    const a = makeDevice(api, "A", undefined, undefined, install);
+    await a.mgr.signup("alice@example.com", "pw");
+    await a.mgr.logout();
+
+    const b = makeDevice(api, "B", undefined, undefined, install);
+    await b.mgr.signup("bob@example.com", "pw");
+    install.state.tasks = [task("bob-1")];
+    expect(b.mgr.snapshot().stashedOwners).toHaveLength(1);
+
+    await b.mgr.deleteAccount(true);
+    expect(install.state.tasks).toEqual([]);
+    expect(install.state.notesDoc).toBeNull();
+    expect(b.mgr.snapshot().stashedOwners).toEqual([]);
+    expect(install.owner.value).toEqual({ tag: null, stash: {} });
+  });
+
+  it("the stash survives sign-out, because the data does", async () => {
+    const api = new FakeBackend();
+    const install = makeInstall({ tasks: [task("alice-1")] });
+    const a = makeDevice(api, "A", undefined, undefined, install);
+    await a.mgr.signup("alice@example.com", "pw");
+    await a.mgr.logout();
+
+    const b = makeDevice(api, "B", undefined, undefined, install);
+    await b.mgr.signup("bob@example.com", "pw");
+    expect(b.mgr.snapshot().stashedOwners).toHaveLength(1);
+    await b.mgr.logout();
+    expect(b.mgr.snapshot().stashedOwners).toHaveLength(1);
+  });
+});
+
+describe("SyncManager — ownership marker on the no-session startup path (L7)", () => {
+  it("marks pre-existing data as unowned when an install has never recorded an owner", async () => {
+    // init() returned before claimResumedSession() when no session was persisted, so an
+    // install that signed out before upgrading never got the migration backfill on ANY
+    // launch. Its data stayed "unowned", and the next account to sign in adopted it — and
+    // pushed someone else's tasks and notes into its own cloud blobs.
+    const api = new FakeBackend();
+    const install = makeInstall({ tasks: [task("someone-elses")] });
+    const a = makeDevice(api, "A", undefined, undefined, install);
+    await a.mgr.init();
+    expect(install.owner.value?.tag).toBe("unknown-owner");
+
+    const b = makeDevice(api, "B", undefined, undefined, install);
+    await b.mgr.signup("newcomer@example.com", "pw");
+    // Not adopted: set aside intact, and offered back through the stash UI.
+    expect(install.state.tasks.filter((t) => !t.deleted)).toEqual([]);
+    expect(b.mgr.snapshot().stashedOwners).toHaveLength(1);
+
+    const c = makeDevice(api, "C");
+    await c.mgr.login("newcomer@example.com", "pw");
+    expect(c.local.tasks.filter((t) => !t.deleted)).toEqual([]);
+  });
+
+  it("leaves a genuinely empty install adoptable, so a first signup keeps its tasks", async () => {
+    // The other half: on a fresh install there is nothing to protect, so the tasks someone
+    // types before creating an account must still come with them.
+    const api = new FakeBackend();
+    const install = makeInstall();
+    const a = makeDevice(api, "A", undefined, undefined, install);
+    await a.mgr.init();
+    expect(install.owner.value).toEqual({ tag: null, stash: {} });
+
+    install.state.tasks = [task("typed-before-signup")];
+    const b = makeDevice(api, "B", undefined, undefined, install);
+    await b.mgr.signup("first@example.com", "pw");
+    expect(install.state.tasks.map((t) => t.id)).toEqual(["typed-before-signup"]);
+
+    const c = makeDevice(api, "C");
+    await c.mgr.login("first@example.com", "pw");
+    expect(c.local.tasks.map((t) => t.id)).toEqual(["typed-before-signup"]);
+  });
+
+  it("does not overwrite an ownership marker that already exists", async () => {
+    const api = new FakeBackend();
+    const install = makeInstall({ tasks: [task("alice-1")] });
+    const a = makeDevice(api, "A", undefined, undefined, install);
+    await a.mgr.signup("alice@example.com", "pw");
+    const tag = install.owner.value?.tag;
+    await a.mgr.logout();
+
+    const b = makeDevice(api, "B", undefined, undefined, install);
+    await b.mgr.init(); // no session persisted for B
+    expect(install.owner.value?.tag).toBe(tag); // still Alice's, not "unknown-owner"
+  });
+});
+
+describe("SyncManager — recovery key rotation (M3)", () => {
+  it("replaces the recovery key and kills the old one", async () => {
+    const api = new FakeBackend();
+    const a = makeDevice(api, "A");
+    await a.mgr.signup("rot@example.com", "pw");
+    const original = a.mgr.snapshot().recoveryKey!;
+    a.mgr.dismissRecoveryKey();
+
+    await a.mgr.regenerateRecoveryKey();
+    const replacement = a.mgr.snapshot().recoveryKey!;
+    expect(replacement).not.toBe(original);
+    expect(a.mgr.snapshot().recoveryKeyIsRotation).toBe(true);
+    a.mgr.dismissRecoveryKey();
+
+    // The old key no longer recovers the account…
+    const b = makeDevice(api, "B");
+    await expect(b.mgr.recover("rot@example.com", original, "new-password-here")).rejects.toThrow();
+    // …and the replacement does, unwrapping the SAME ADK (so nothing was re-encrypted).
+    const c = makeDevice(api, "C");
+    await c.mgr.recover("rot@example.com", replacement, "new-password-here");
+    expect(c.mgr.snapshot().status).toBe("idle");
+  });
+
+  it("leaves the password alone when only the recovery key rotates", async () => {
+    const api = new FakeBackend();
+    const a = makeDevice(api, "A", { tasks: [task("t1")] });
+    await a.mgr.signup("rot2@example.com", "pw");
+    a.mgr.dismissRecoveryKey();
+    await a.mgr.regenerateRecoveryKey();
+    a.mgr.dismissRecoveryKey();
+
+    const b = makeDevice(api, "B");
+    await b.mgr.login("rot2@example.com", "pw");
+    expect(b.local.tasks.map((t) => t.id)).toEqual(["t1"]); // same ADK, blobs still readable
+  });
+
+  it("a password reset burns the recovery key it used", async () => {
+    // Whoever ran the reset proved they hold the key. Leaving it valid hands an attacker a
+    // permanent second credential, and leaves the real owner able only to ping-pong the
+    // password back and forth.
+    const api = new FakeBackend();
+    const a = makeDevice(api, "A");
+    await a.mgr.signup("burn@example.com", "pw");
+    const used = a.mgr.snapshot().recoveryKey!;
+    a.mgr.dismissRecoveryKey();
+
+    const b = makeDevice(api, "B");
+    await b.mgr.recover("burn@example.com", used, "brand-new-password");
+    const replacement = b.mgr.snapshot().recoveryKey!;
+    expect(replacement).not.toBe(used);
+    expect(b.mgr.snapshot().recoveryKeyIsRotation).toBe(true);
+
+    const c = makeDevice(api, "C");
+    await expect(c.mgr.recover("burn@example.com", used, "another-password")).rejects.toThrow();
   });
 });

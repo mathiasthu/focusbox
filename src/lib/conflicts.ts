@@ -1,19 +1,12 @@
 import { decryptBlob, encryptBlob } from "./crypto";
 import { ConflictError, type SyncApi } from "./api";
-import { notesConflictKey, type NotesValue } from "./syncTypes";
+import { newNotesConflictKey, type NotesValue } from "./syncTypes";
 
 const CONFLICT_PREFIX = "notes_conflict:";
-
-/** Short random suffix to guarantee a unique backup-copy key (collision-free). */
-function randomSuffix(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID().slice(0, 8);
-  return Math.random().toString(36).slice(2, 10);
-}
 
 export interface ConflictMeta {
   key: string;
   updatedAt: number;
-  deviceId: string | null;
 }
 
 export interface ConflictContent {
@@ -28,14 +21,16 @@ export async function listConflicts(api: SyncApi, token: string): Promise<Confli
   return manifest
     .filter((m) => m.key.startsWith(CONFLICT_PREFIX))
     .map((m) => {
-      // key shape: notes_conflict:<deviceId>-<updatedAtMs>
+      // Current keys are opaque (see newNotesConflictKey), so the display timestamp comes
+      // from the manifest. Keys written before v0.2.19 embedded it as
+      // `notes_conflict:<deviceId>-<updatedAtMs>`; still read those so old copies keep
+      // showing their real edit time.
       const suffix = m.key.slice(CONFLICT_PREFIX.length);
       const dash = suffix.lastIndexOf("-");
-      const ts = dash >= 0 ? Number(suffix.slice(dash + 1)) : NaN;
+      const legacyTs = dash >= 0 ? Number(suffix.slice(dash + 1)) : NaN;
       return {
         key: m.key,
-        updatedAt: Number.isFinite(ts) ? ts : Date.parse(m.updated_at) || 0,
-        deviceId: dash >= 0 ? suffix.slice(0, dash) : null,
+        updatedAt: Number.isFinite(legacyTs) ? legacyTs : Date.parse(m.updated_at) || 0,
       };
     })
     .sort((a, b) => b.updatedAt - a.updatedAt);
@@ -49,7 +44,12 @@ export async function getConflict(
   key: string,
 ): Promise<ConflictContent> {
   const blob = await api.getBlob(token, key);
-  const value = JSON.parse(decryptBlob(blob.ciphertext, blob.nonce, adk)) as NotesValue;
+  // Same framing rule as sync.pull(): the server does not get to substitute a different
+  // blob for the one that was asked for.
+  if (blob.key !== key) {
+    throw new Error(`sync server answered "${key}" with blob "${blob.key}"`);
+  }
+  const value = JSON.parse(decryptBlob(blob.ciphertext, blob.nonce, adk, key)) as NotesValue;
   return {
     key,
     doc: value.doc ?? null,
@@ -77,26 +77,25 @@ export async function restoreConflict(opts: {
   api: SyncApi;
   token: string;
   adk: Uint8Array;
-  deviceId: string;
   key: string;
   current: NotesValue;
   now: number;
 }): Promise<RestoreResult> {
-  const { api, token, adk, deviceId, key, current, now } = opts;
+  const { api, token, adk, key, current, now } = opts;
   const restored = await getConflict(api, token, adk, key);
 
-  const hasContent = current.doc !== null;
-  const differs = JSON.stringify(current.doc) !== JSON.stringify(restored.doc);
+  const hasContent = current.doc !== null && current.doc !== undefined;
+  const differs = JSON.stringify(current.doc ?? null) !== JSON.stringify(restored.doc);
   if (hasContent && differs) {
-    // Unique suffix so the backup can NEVER collide with an existing conflict blob — a
+    // Fresh random key so the backup can NEVER collide with an existing conflict blob — a
     // base_version:0 push onto an occupied key would 409 and (if we ignored it) silently
     // drop the unsynced current note. With a fresh key a 409 is unreachable; any genuine
     // failure (network) propagates and aborts BEFORE we delete the restored copy, so the
     // current note is never lost.
-    const backupKey = notesConflictKey(`${deviceId}-${now}-${randomSuffix()}`);
-    const { ciphertext, nonce } = encryptBlob(JSON.stringify(current), adk);
+    const backupKey = newNotesConflictKey();
+    const { ciphertext, nonce } = encryptBlob(JSON.stringify(current), adk, backupKey);
     try {
-      await api.pushBlob(token, { key: backupKey, ciphertext, nonce, base_version: 0, device_id: deviceId });
+      await api.pushBlob(token, { key: backupKey, ciphertext, nonce, base_version: 0 });
     } catch (e) {
       if (!(e instanceof ConflictError)) throw e; // defensive: a fresh key shouldn't 409
     }

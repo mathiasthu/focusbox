@@ -28,6 +28,38 @@ const RECOVERY_AUTH_PERSONAL = "fbsync01-recovery-auth";
 const OWNER_TAG_PERSONAL = "fbsync01-owner-tag";
 const OWNER_TAG_BYTES = 16;
 
+// --- AEAD associated data (framing binding) ---
+// XChaCha20-Poly1305 authenticates the ciphertext but says NOTHING about where that
+// ciphertext was supposed to live. Without associated data every blob on an account is
+// interchangeable: a hostile server can answer a request for `notes` with the account's
+// own `settings` ciphertext and it decrypts cleanly under the same ADK, because nothing
+// in the sealed message disagrees. Binding the blob key and the owner tag into the AAD
+// makes a misrouted or cross-account ciphertext fail authentication instead.
+const AAD_BLOB = "fbsync01-blob";
+// The two ADK wrappers are also domain-separated, so a wrapper can never be replayed
+// into the other slot even if an attacker somehow controlled the wrapping key.
+const AAD_WRAP_PASSWORD = "fbsync01-wrap-password";
+const AAD_WRAP_RECOVERY = "fbsync01-wrap-recovery";
+
+/**
+ * Accept ciphertexts sealed by pre-v0.2.19 clients, which used `aad = null`.
+ *
+ * Every blob is re-sealed with AAD the first time an upgraded client pushes that key, so
+ * this only has to cover the window where older blobs (and older devices) are still in
+ * play. It is a downgrade path by construction — while it is on, a hostile server can
+ * still present a legacy ciphertext for the wrong key — which is why the framing checks
+ * in sync.ts (blob-key assertion, version monotonicity) and the null-doc guard in
+ * merge.ts are independent defenses rather than belt-and-braces for this one.
+ *
+ * REMOVE in a release after every account has re-pushed under the new format.
+ */
+const ACCEPT_LEGACY_UNAUTHENTICATED_FRAMING = true;
+
+function aadBytes(parts: string[]): Uint8Array {
+  // NUL-joined so no combination of components can be re-split into a different tuple.
+  return sodium.from_string(parts.join("\0"));
+}
+
 export interface KdfParams {
   alg: "argon2id";
   v: number;
@@ -78,21 +110,27 @@ function deriveKeys(email: string, password: string): DerivedKeys {
 }
 
 // --- AEAD wrap/unwrap (XChaCha20-Poly1305): single base64(nonce ‖ ciphertext) string ---
-function aeadWrap(message: Uint8Array, key: Uint8Array): string {
+function aeadWrap(message: Uint8Array, key: Uint8Array, aad: Uint8Array): string {
   const nonce = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
-  const ct = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(message, null, null, nonce, key);
+  const ct = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(message, aad, null, nonce, key);
   const combined = new Uint8Array(nonce.length + ct.length);
   combined.set(nonce);
   combined.set(ct, nonce.length);
   return sodium.to_base64(combined);
 }
 
-function aeadUnwrap(wrapped: string, key: Uint8Array): Uint8Array {
+function aeadUnwrap(wrapped: string, key: Uint8Array, aad: Uint8Array): Uint8Array {
   const combined = sodium.from_base64(wrapped);
   const n = sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
   const nonce = combined.slice(0, n);
   const ct = combined.slice(n);
-  return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null, ct, null, nonce, key);
+  try {
+    return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null, ct, aad, nonce, key);
+  } catch (e) {
+    if (!ACCEPT_LEGACY_UNAUTHENTICATED_FRAMING) throw e;
+    // Pre-v0.2.19 wrapper (aad = null). Re-wrapped with AAD on the next password change.
+    return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null, ct, null, nonce, key);
+  }
 }
 
 function recoveryWrapKey(recoveryKeyBytes: Uint8Array): Uint8Array {
@@ -148,8 +186,12 @@ export async function createAccount(email: string, password: string): Promise<Cr
   return {
     signup: {
       auth_hash: sodium.to_base64(authKey),
-      wrapped_adk: aeadWrap(adk, encKey),
-      recovery_wrapped_adk: aeadWrap(adk, recoveryWrapKey(recoveryBytes)),
+      wrapped_adk: aeadWrap(adk, encKey, aadBytes([AAD_WRAP_PASSWORD])),
+      recovery_wrapped_adk: aeadWrap(
+        adk,
+        recoveryWrapKey(recoveryBytes),
+        aadBytes([AAD_WRAP_RECOVERY]),
+      ),
       recovery_auth_hash: sodium.to_base64(recoveryAuthBytes(recoveryBytes)),
       kdf_params: kdfParams(),
     },
@@ -183,7 +225,8 @@ export function startLogin(email: string, password: string): LoginStart {
 /** Phase 2 of login: unwrap the server's wrapped_adk with the encKey from startLogin. */
 export function completeLogin(encKey: Uint8Array, wrappedAdk: string): Session {
   ensureReady();
-  const adk = aeadUnwrap(wrappedAdk, encKey); // throws if the password is wrong (AEAD auth fails)
+  // throws if the password is wrong (AEAD auth fails)
+  const adk = aeadUnwrap(wrappedAdk, encKey, aadBytes([AAD_WRAP_PASSWORD]));
   return { adk, encKey };
 }
 
@@ -229,7 +272,46 @@ export async function recoverWithKey(
     recoveryKey.trim(),
     sodium.base64_variants.URLSAFE_NO_PADDING,
   );
-  return aeadUnwrap(recoveryWrappedAdk, recoveryWrapKey(recoveryBytes)); // returns the ADK
+  // returns the ADK
+  return aeadUnwrap(
+    recoveryWrappedAdk,
+    recoveryWrapKey(recoveryBytes),
+    aadBytes([AAD_WRAP_RECOVERY]),
+  );
+}
+
+export interface RegeneratedRecovery {
+  /** shown to the user once; never persisted */
+  recoveryKey: string;
+  recovery_wrapped_adk: string;
+  recovery_auth_hash: string;
+}
+
+/**
+ * Mint fresh recovery material for an ADK the caller already holds.
+ *
+ * The ADK itself is unchanged — only its recovery-side wrapper rolls — so no blob has to
+ * be re-encrypted and every device keeps working. This is what makes a leaked recovery
+ * key revocable: the old key's wrap key no longer opens `recovery_wrapped_adk`, and its
+ * `recovery_auth_hash` no longer matches the stored one, so it can neither read the ADK
+ * nor authorize a password reset.
+ *
+ * It does NOT undo a leak that already happened: an attacker who copied the ADK before
+ * rotation keeps it. Re-keying the ADK (and re-encrypting every blob) is the only answer
+ * to that, and is deliberately not implemented.
+ */
+export function regenerateRecoveryKey(adk: Uint8Array): RegeneratedRecovery {
+  ensureReady();
+  const recoveryBytes = sodium.randombytes_buf(KEY_BYTES);
+  return {
+    recoveryKey: sodium.to_base64(recoveryBytes, sodium.base64_variants.URLSAFE_NO_PADDING),
+    recovery_wrapped_adk: aeadWrap(
+      adk,
+      recoveryWrapKey(recoveryBytes),
+      aadBytes([AAD_WRAP_RECOVERY]),
+    ),
+    recovery_auth_hash: sodium.to_base64(recoveryAuthBytes(recoveryBytes)),
+  };
 }
 
 /** Re-wrap an existing ADK under a new password (password change / recovery completion). */
@@ -242,7 +324,7 @@ export async function rewrapForNewPassword(
   const { encKey, authKey } = deriveKeys(email, newPassword);
   return {
     auth_hash: sodium.to_base64(authKey),
-    wrapped_adk: aeadWrap(adk, encKey),
+    wrapped_adk: aeadWrap(adk, encKey, aadBytes([AAD_WRAP_PASSWORD])),
     kdf_params: kdfParams(),
   };
 }
@@ -252,12 +334,19 @@ export interface EncryptedBlob {
   nonce: string;
 }
 
-export function encryptBlob(plaintext: string, adk: Uint8Array): EncryptedBlob {
+/** Ties a sealed blob to the key it is stored under AND the account that owns it. */
+function blobAad(key: string, adk: Uint8Array): Uint8Array {
+  return aadBytes([AAD_BLOB, key, ownerTagFromAdk(adk)]);
+}
+
+/** `key` is the server blob key this ciphertext will be stored under. It is authenticated,
+ * not encrypted — a blob sealed for one key can never be decrypted as another. */
+export function encryptBlob(plaintext: string, adk: Uint8Array, key: string): EncryptedBlob {
   ensureReady();
   const nonce = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
   const ct = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
     sodium.from_string(plaintext),
-    null,
+    blobAad(key, adk),
     null,
     nonce,
     adk,
@@ -265,14 +354,24 @@ export function encryptBlob(plaintext: string, adk: Uint8Array): EncryptedBlob {
   return { ciphertext: sodium.to_base64(ct), nonce: sodium.to_base64(nonce) };
 }
 
-export function decryptBlob(ciphertext: string, nonce: string, adk: Uint8Array): string {
+/** `key` must be the key the caller ASKED the server for, not the one the server claims
+ * to have answered with — otherwise the binding checks nothing. */
+export function decryptBlob(
+  ciphertext: string,
+  nonce: string,
+  adk: Uint8Array,
+  key: string,
+): string {
   ensureReady();
-  const pt = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
-    null,
-    sodium.from_base64(ciphertext),
-    null,
-    sodium.from_base64(nonce),
-    adk,
-  );
+  const ct = sodium.from_base64(ciphertext);
+  const n = sodium.from_base64(nonce);
+  let pt: Uint8Array;
+  try {
+    pt = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null, ct, blobAad(key, adk), n, adk);
+  } catch (e) {
+    if (!ACCEPT_LEGACY_UNAUTHENTICATED_FRAMING) throw e;
+    // Pre-v0.2.19 blob (aad = null). Re-sealed with AAD on the next push of this key.
+    pt = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null, ct, null, n, adk);
+  }
   return sodium.to_string(pt);
 }

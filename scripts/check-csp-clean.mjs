@@ -45,10 +45,35 @@ async function jsFiles(dir) {
   }
   return out;
 }
+// Absolute http(s) URL, matched WHOLE and then parsed. Reading the host with a character
+// class instead — `/https?:\/\/([a-z0-9.-]+)/` — stops at the first character outside the
+// class, so `@` ends the match and userinfo swallows the check entirely:
+// `https://api.focusbox.net@evil.tld/x` reads as host `api.focusbox.net` and passes. The
+// whole point of this gate is catching a bundle that reaches a third-party origin — i.e. a
+// malicious dependency exfiltrating sync keys — and a malicious dependency picks its own
+// URL spelling.
+const ABSOLUTE_URL = /https?:\/\/[^\s"'`<>\\)\]}]+/gi;
+// Protocol-relative URLs. No scheme of their own, so they inherit the page's — and the old
+// pattern never matched them at all. Anchored to the start of a string literal: minified
+// JS is full of regex literals whose flags read as a host (`/…/i.test(x)` → `//i.test`),
+// and a URL that reaches the network has to live in a string. Like the absolute-URL scan,
+// this is a tripwire for a dependency that ships an unexpected origin, not a proof against
+// one that assembles the URL at runtime.
+const PROTOCOL_RELATIVE =
+  /(?<=["'`])\/\/[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?:[:/?#][^\s"'`<>\\)\]}]*)?/gi;
+
 for (const f of await jsFiles(DIST)) {
   const src = await readFile(f, "utf8");
-  for (const m of src.matchAll(/https?:\/\/([a-z0-9.-]+)/gi)) {
-    const host = m[1].toLowerCase();
+  for (const m of src.matchAll(PROTOCOL_RELATIVE)) {
+    fail(`protocol-relative URL in ${f.replace(DIST + "/", "")}: ${m[0].slice(0, 80)}`);
+  }
+  for (const m of src.matchAll(ABSOLUTE_URL)) {
+    let host;
+    try {
+      host = new URL(m[0]).hostname.toLowerCase();
+    } catch {
+      continue; // not a parseable URL after all
+    }
     // Allow same-origin-less relative usage + the two app hosts + localhost dev refs in comments.
     if (host === "api.focusbox.net" || host === "app.focusbox.net") continue;
     if (host.endsWith(".stripe.com") || host === "stripe.com") continue; // billing redirect target (allow-listed)

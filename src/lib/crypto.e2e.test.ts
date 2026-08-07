@@ -46,7 +46,7 @@ describe.skipIf(!enabled)("e2e: client crypto <-> sync server", () => {
     // unlock with the server-returned wrapped_adk, then push an encrypted note
     const unlocked = await unlockAccount(email, password, login.wrapped_adk);
     const token = login.access_token;
-    const blob = encryptBlob(JSON.stringify({ doc: "hello e2e" }), unlocked.session.adk);
+    const blob = encryptBlob(JSON.stringify({ doc: "hello e2e" }), unlocked.session.adk, "notes");
     r = await fetch(`${BASE}/v1/sync`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -61,7 +61,7 @@ describe.skipIf(!enabled)("e2e: client crypto <-> sync server", () => {
     });
     expect(r.status).toBe(200);
     const pulled = await r.json();
-    const plain = decryptBlob(pulled.ciphertext, pulled.nonce, unlocked.session.adk);
+    const plain = decryptBlob(pulled.ciphertext, pulled.nonce, unlocked.session.adk, "notes");
     expect(JSON.parse(plain).doc).toBe("hello e2e");
   });
 });

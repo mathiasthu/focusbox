@@ -621,6 +621,51 @@ body::after {
   padding-top: 10px;
   border-top: 1px solid var(--line);
 }
+.account__checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.account__stash {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.account__stash-notice {
+  color: var(--ink-soft);
+}
+.account__stash-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.account__stash-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.account__stash-meta {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+.account__stash-preview {
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+.account__recovery-rotate {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 
 /* ---------- Timer dial ---------- */
 .timer {

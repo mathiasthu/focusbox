@@ -77,8 +77,12 @@ function device(over: Partial<LocalData> = {}): LocalData {
   };
 }
 
-const run = (api: SyncApi, local: LocalData, state: SyncState, deviceId: string) =>
-  syncOnce({ api, token: "t", adk, local, state, deviceId });
+const NOW = 1_800_000_000_000; // fixed clock, so the skew clamp is deterministic
+
+// The trailing string is the device label the tests read as "which device is syncing".
+// It no longer reaches the wire (see PushBody) — kept here purely for readability.
+const run = (api: SyncApi, local: LocalData, state: SyncState, _device: string, now = NOW) =>
+  syncOnce({ api, token: "t", adk, local, state, now });
 
 describe("syncOnce orchestration", () => {
   it("propagates a task from device A to device B", async () => {

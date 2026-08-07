@@ -45,7 +45,10 @@ export interface SyncController extends SyncSnapshot {
   getConflict: (key: string) => Promise<ConflictContent>;
   restoreConflict: (key: string) => Promise<void>;
   discardConflict: (key: string) => Promise<void>;
-  deleteAccount: () => Promise<void>;
+  deleteAccount: (alsoEraseLocal?: boolean) => Promise<void>;
+  restoreStash: (tag: string) => Promise<void>;
+  discardStash: (tag: string) => Promise<void>;
+  regenerateRecoveryKey: () => Promise<void>;
 }
 
 const SIGNED_OUT: SyncSnapshot = {
@@ -54,7 +57,10 @@ const SIGNED_OUT: SyncSnapshot = {
   lastSyncedAt: null,
   lastError: null,
   recoveryKey: null,
+  recoveryKeyIsRotation: false,
   hadNotesConflict: false,
+  stashedOwners: [],
+  dataSetAsideThisSession: false,
   billingEnabled: false,
   syncEnabled: true,
   subscriptionStatus: "none",
@@ -149,6 +155,11 @@ export function useSync(args: {
       mgrRef.current?.getConflict(key) ?? Promise.reject(new Error("sync not ready")),
     restoreConflict: (key) => mgrRef.current?.restoreConflict(key) ?? Promise.resolve(),
     discardConflict: (key) => mgrRef.current?.discardConflict(key) ?? Promise.resolve(),
-    deleteAccount: () => mgrRef.current?.deleteAccount() ?? Promise.resolve(),
+    deleteAccount: (alsoEraseLocal) =>
+      mgrRef.current?.deleteAccount(alsoEraseLocal) ?? Promise.resolve(),
+    restoreStash: (tag) => mgrRef.current?.restoreStash(tag) ?? Promise.resolve(),
+    discardStash: (tag) => mgrRef.current?.discardStash(tag) ?? Promise.resolve(),
+    regenerateRecoveryKey: () =>
+      mgrRef.current?.regenerateRecoveryKey() ?? Promise.reject(new Error("sync not ready")),
   };
 }

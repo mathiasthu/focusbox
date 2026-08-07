@@ -54,9 +54,11 @@ Or skip installing and [use it in your browser](https://app.focusbox.net).
   notes live in a single file on your own disk.
 - **Nothing watching** — no analytics, no telemetry, no productivity grades.
 - **Optional sync** — $2/mo (or $20/yr) keeps your devices in step,
-  **end-to-end encrypted**: the server only ever stores encrypted blobs and
-  never sees your password or keys. Turn it on in the app under
-  **Settings → Account**. The app is fully usable without it, forever.
+  **end-to-end encrypted**: your tasks, notes and settings are encrypted on your
+  device, and the server never sees your password or keys. Alongside the
+  encrypted blobs it necessarily stores the routing metadata any server needs —
+  your email address, and when each blob was last written. Turn it on in the app
+  under **Settings → Account**. The app is fully usable without it, forever.
 
 ## Built with
 

@@ -18,7 +18,46 @@ on:
     tags: ["v*"]
 
 jobs:
+  # Tests and the CSP gate run BEFORE anything is signed, and they run without any
+  # secrets. Neither was wired into CI before: `npm run build` doesn't call check:csp,
+  # and the gate's only caller was deploy-web.sh — which is gitignored, so the control
+  # existed on exactly one machine.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: CSP gate
+        run: npm run check:csp
+
+      # The installers consume this instead of rebuilding, so `vite build` — and the
+      # ~500 npm packages that run during it — never execute in a job that holds the
+      # updater signing key.
+      - name: Upload frontend build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: frontend-dist
+          path: dist
+          if-no-files-found: error
+          retention-days: 1
+
   build:
+    needs: checks
     permissions:
       contents: write # needed to create the Release
     # Updater signing secrets live ONLY in the `release` Environment (required reviewers),
@@ -58,8 +97,20 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Install frontend dependencies
-        run: npm ci
+      - name: Download frontend build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: frontend-dist
+          path: dist
+
+      # --ignore-scripts: the only thing needed from npm in this job is the Tauri CLI
+      # binary. Nothing here should execute package install hooks, and this job is the one
+      # that holds the signing key. (Residual exposure, unavoidable: `tauri build` runs
+      # cargo, so the ~560 crates' build.rs still execute with the key in the environment.
+      # The larger point stands either way — for the same adversary, poisoning dist/ so the
+      # legitimate build signs it needs no key theft at all.)
+      - name: Install Tauri CLI
+        run: npm ci --ignore-scripts
 
       - name: Build (+ publish Release on tag) with signed updater artifacts
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
@@ -91,7 +142,9 @@ jobs:
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
-          args: ${{ matrix.args }}
+          # tauri.ci.conf.json blanks beforeBuildCommand so the bundler uses the dist/
+          # artifact built in `checks` rather than re-running vite here.
+          args: ${{ matrix.args }} --config tauri.ci.conf.json
 
       - name: Upload installer artifact (for manual runs)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

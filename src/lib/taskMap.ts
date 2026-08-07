@@ -1,4 +1,4 @@
-import type { SyncedTask } from "./syncTypes";
+import { clampStamp, type SyncedTask } from "./syncTypes";
 
 /** The slim shape the TaskList component reads/returns (no sync metadata). */
 export interface VisibleTask {
@@ -62,7 +62,9 @@ export function reconcileTasks(
   return out;
 }
 
-/** Coerce persisted/legacy task data into valid SyncedTask[] (drops entries with no id). */
+/** Coerce persisted/legacy task data into valid SyncedTask[] (drops entries with no id).
+ * Timestamps are clamped to the skew window: a far-future one read back off disk would
+ * otherwise outrank its own tombstone forever (see SKEW_TOLERANCE_MS). */
 export function migrateTasks(raw: unknown, now: number): SyncedTask[] {
   if (!Array.isArray(raw)) return [];
   const out: SyncedTask[] = [];
@@ -75,8 +77,7 @@ export function migrateTasks(raw: unknown, now: number): SyncedTask[] {
       text: typeof o.text === "string" ? o.text : "",
       done: o.done === true,
       order: typeof o.order === "number" && Number.isFinite(o.order) ? o.order : i,
-      updated_at:
-        typeof o.updated_at === "number" && Number.isFinite(o.updated_at) ? o.updated_at : now,
+      updated_at: clampStamp(o.updated_at, now, now),
       deleted: o.deleted === true,
     });
   });

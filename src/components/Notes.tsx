@@ -1,5 +1,6 @@
 import { useEditor, useEditorState, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import Link from "@tiptap/extension-link";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -443,10 +444,88 @@ function Toolbar({
 
 export const LINE_DRAG_MIME = "application/x-focusbox-line";
 
+/**
+ * Schemes a note link may carry.
+ *
+ * The `//evil.example/x` case is the one worth spelling out: a protocol-relative URL has
+ * no scheme of its own, so it inherits the page's. TipTap's stock `isAllowedUri` lets it
+ * through (its `[^a-z]` branch never sees a scheme to reject), and on Windows the app's
+ * page is served over `http://tauri.localhost`, so it resolves to plain HTTP.
+ */
+export function isSafeLinkUrl(url: string): boolean {
+  const trimmed = url.trim();
+  if (trimmed.startsWith("//")) return false;
+  const scheme = /^([a-zA-Z][a-zA-Z0-9+.\-]*):/.exec(trimmed)?.[1]?.toLowerCase();
+  if (scheme === undefined) return true; // bare host: TipTap prefixes defaultProtocol
+  return scheme === "http" || scheme === "https" || scheme === "mailto";
+}
+
+/**
+ * Links that cannot navigate the app's own window.
+ *
+ * `target` and `rel` are ordinary schema attributes with no custom `parseHTML`, so
+ * TipTap's generic `node.getAttribute(name)` rule copies them straight off pasted
+ * clipboard HTML and `mergeAttributes` lets them overwrite the safe defaults. Pasting
+ * `<a href="…" target="_self" rel="">` therefore yields exactly that anchor, and a left
+ * click becomes `window.open(href, "_self")` — an ordinary navigation of the current
+ * webview, which Tauri's default navigation handler allows unconditionally. The window is
+ * chromeless (no address bar, no back button), and the passphrase that unwraps everything
+ * is typed in it, so "session expired, re-enter your sync passphrase" rendered in the
+ * app's own frame is a convincing capture. Delivery is easy: a page installs a `copy`
+ * handler so copying any innocuous sentence puts the malicious anchor on the clipboard.
+ *
+ * Pinning both attributes to constants on parse AND render closes it at the source;
+ * `openOnClick: false` plus the explicit handler below means no click reaches the
+ * browser's own link handling at all; the nav guard in src-tauri/src/lib.rs is the
+ * backstop for whatever comes next.
+ */
+const SafeLink = Link.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      target: {
+        default: "_blank",
+        parseHTML: () => null,
+        renderHTML: () => ({ target: "_blank" }),
+      },
+      rel: {
+        default: "noopener noreferrer nofollow",
+        parseHTML: () => null,
+        renderHTML: () => ({ rel: "noopener noreferrer nofollow" }),
+      },
+    };
+  },
+}).configure({
+  openOnClick: false,
+  defaultProtocol: "https",
+  protocols: ["http", "https", "mailto"],
+  isAllowedUri: (url, ctx) => isSafeLinkUrl(url) && ctx.defaultValidate(url),
+});
+
+/** Left-click on a note link. In the browser this opens a new tab, as it always has. In
+ * the packaged app it does nothing, which is also what it has always done — a `_blank`
+ * click is inert there because no `on_new_window` handler is registered. Making it open
+ * the system browser would mean widening the Tauri opener scope from the two URLs it
+ * allows today to all of http/https, which is a bigger hole than this is a feature. */
+function openNoteLink(href: string): void {
+  if (!isSafeLinkUrl(href)) return;
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return; // relative/!absolute: nothing sensible to open
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "mailto:") return;
+  if ("__TAURI_INTERNALS__" in window) return;
+  window.open(url.href, "_blank", "noopener,noreferrer");
+}
+
 export default function Notes({ doc, onChange, onEditorReady, onLineDragChange, onFocusLine, focusDone }: Props) {
   const editor = useEditor({
     extensions: [
-      StarterKit,
+      // StarterKit ships a Link extension; replace it wholesale with the hardened one.
+      StarterKit.configure({ link: false }),
+      SafeLink,
       TaskList,
       TaskItem.configure({ nested: true }),
       FocusedLine,
@@ -530,7 +609,17 @@ export default function Notes({ doc, onChange, onEditorReady, onLineDragChange, 
           setHandleTop(null);
         }}
       >
-        <EditorContent editor={editor} className="notes__editor" />
+        <EditorContent
+          editor={editor}
+          className="notes__editor"
+          onClick={(e) => {
+            const a = (e.target as HTMLElement).closest?.("a[href]") as HTMLAnchorElement | null;
+            if (!a) return;
+            // Never let the anchor's own navigation run, whatever its attributes say.
+            e.preventDefault();
+            openNoteLink(a.getAttribute("href") ?? "");
+          }}
+        />
         {handleTop !== null && (
           <button
             type="button"

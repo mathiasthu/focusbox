@@ -33,6 +33,19 @@ export interface RecoverCompleteBody {
   new_auth_hash: string;
   new_wrapped_adk: string;
   kdf_params: KdfParams;
+  // A recovery-key reset burns the key that authorized it: whoever ran this flow proved
+  // they hold the old key, so leaving it valid means an attacker who used it keeps a
+  // permanent second credential (and the legitimate owner can only ping-pong the password
+  // back). Optional on the wire so an older server ignores it rather than 422-ing.
+  new_recovery_wrapped_adk?: string;
+  new_recovery_auth_hash?: string;
+}
+
+/** Authenticated recovery-key rotation: re-wraps the SAME ADK under fresh recovery bytes.
+ * No blob is re-encrypted and other devices are unaffected. */
+export interface RecoveryRotateBody {
+  recovery_wrapped_adk: string;
+  recovery_auth_hash: string;
 }
 
 export interface ManifestEntry {
@@ -54,7 +67,9 @@ export interface PushBody {
   ciphertext: string;
   nonce: string;
   base_version?: number;
-  device_id?: string | null;
+  // No device_id: the server accepts one, but sending a stable per-device UUID on every
+  // push builds a per-device activity timeline out of metadata the sync design otherwise
+  // keeps out of its hands. Nothing server-side needs it.
 }
 
 export interface PushResult {
@@ -105,11 +120,13 @@ export interface AccountInfo {
 
 export type Plan = "monthly" | "annual";
 
+/** Authenticated account management (billing + account-level credentials). */
 export interface BillingApi {
   getAccount(token: string): Promise<AccountInfo>;
   createCheckout(token: string, plan: Plan): Promise<{ url: string }>;
   createPortal(token: string): Promise<{ url: string }>;
   deleteAccount(token: string): Promise<void>;
+  rotateRecovery(token: string, body: RecoveryRotateBody): Promise<void>;
 }
 
 /** The blob-sync surface the orchestrator depends on (injectable for tests). */
@@ -238,6 +255,13 @@ export function createHttpApi(
     },
     async deleteAccount(token) {
       await request(baseUrl, "/v1/account", fetchImpl, { method: "DELETE", token });
+    },
+    async rotateRecovery(token, body) {
+      await request(baseUrl, "/v1/account/recovery/rotate", fetchImpl, {
+        method: "POST",
+        token,
+        body,
+      });
     },
   };
 }

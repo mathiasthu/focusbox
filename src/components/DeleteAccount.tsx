@@ -6,6 +6,7 @@ export default function DeleteAccount({ sync }: { sync: SyncController }) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [eraseLocal, setEraseLocal] = useState(false);
   const armed = !!sync.email && typed.trim().toLowerCase() === sync.email.toLowerCase();
 
   async function doDelete() {
@@ -13,7 +14,7 @@ export default function DeleteAccount({ sync }: { sync: SyncController }) {
     setBusy(true);
     setError(null);
     try {
-      await sync.deleteAccount(); // manager returns to signed-out on success
+      await sync.deleteAccount(eraseLocal); // manager returns to signed-out on success
     } catch {
       setError("Couldn't delete the account. Please try again.");
     } finally {
@@ -32,7 +33,9 @@ export default function DeleteAccount({ sync }: { sync: SyncController }) {
     <div className="account__danger">
       <span className="setting__hint">
         This permanently deletes your synced data and cancels your subscription. Your tasks and
-        notes stay on this device. Type your email to confirm.
+        notes stay on this device — if you later create another account here they'll be set
+        aside for it, listed under "Data from other accounts on this device", and restorable
+        in one click. Type your email to confirm.
       </span>
       <input
         className="account__input"
@@ -43,6 +46,15 @@ export default function DeleteAccount({ sync }: { sync: SyncController }) {
         onChange={(e) => setTyped(e.target.value)}
         disabled={busy}
       />
+      <label className="account__checkbox">
+        <input
+          type="checkbox"
+          checked={eraseLocal}
+          onChange={(e) => setEraseLocal(e.target.checked)}
+          disabled={busy}
+        />
+        Also erase my tasks and notes on this device
+      </label>
       {error && <span className="account__error">{error}</span>}
       <div className="account__row">
         <button

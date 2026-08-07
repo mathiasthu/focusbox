@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { SyncController } from "../hooks/useSync";
+import { checkPassword } from "../lib/passwordPolicy";
 
 export default function RecoverForm({
   sync,
@@ -12,6 +13,7 @@ export default function RecoverForm({
   const [recoveryKey, setRecoveryKey] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const pw = checkPassword(password, email);
 
   async function submit() {
     if (busy) return;
@@ -32,7 +34,8 @@ export default function RecoverForm({
       <span className="setting__label">Reset password with recovery key</span>
       <span className="setting__hint">
         Enter the recovery key you saved at signup and a new password. Without the key we can't
-        reset it for you.
+        reset it for you. The key you enter here is used up — a replacement is shown once when
+        the reset finishes.
       </span>
       <input
         className="account__input"
@@ -64,6 +67,9 @@ export default function RecoverForm({
           if (e.key === "Enter") void submit();
         }}
       />
+      {password.length > 0 && pw.message && (
+        <span className={pw.acceptable ? "setting__hint" : "account__error"}>{pw.message}</span>
+      )}
       {sync.lastError && <span className="account__error">{sync.lastError}</span>}
       <div className="account__row">
         <button className="account__btn" onClick={onBack} disabled={busy}>
@@ -72,7 +78,7 @@ export default function RecoverForm({
         <button
           className="account__btn account__btn--primary"
           onClick={() => void submit()}
-          disabled={busy || !email.trim() || !recoveryKey.trim() || !password}
+          disabled={busy || !email.trim() || !recoveryKey.trim() || !pw.acceptable}
         >
           {busy ? "…" : "Reset password"}
         </button>

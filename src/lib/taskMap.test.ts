@@ -116,3 +116,26 @@ describe("migrateTasks", () => {
     expect(migrateTasks([{ nope: true }], 1)).toEqual([]); // drops entries without an id
   });
 });
+
+describe("migrateTasks — future-timestamp clamp", () => {
+  const NOW = 1_800_000_000_000;
+
+  it("collapses an implausibly-future stamp read back off disk", () => {
+    // A task carrying updated_at = 2099 beats every honest edit AND its own tombstone, so
+    // a deleted task resurrects on every sync until the wall clock passes the value.
+    const [t] = migrateTasks(
+      [{ id: "a", text: "x", done: false, order: 0, updated_at: Date.UTC(2099, 0, 1) }],
+      NOW,
+    );
+    expect(t.updated_at).toBe(NOW);
+  });
+
+  it("leaves ordinary clock skew between a user's own devices alone", () => {
+    const slightlyAhead = NOW + 60_000;
+    const [t] = migrateTasks(
+      [{ id: "a", text: "x", done: false, order: 0, updated_at: slightlyAhead }],
+      NOW,
+    );
+    expect(t.updated_at).toBe(slightlyAhead);
+  });
+});
