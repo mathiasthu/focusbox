@@ -51,6 +51,8 @@ class FakeBackend implements SyncApi, AuthApi, BillingApi {
   subscriptionStatus = "none";
   transientFail = 0; // when > 0, getManifest throws a network error and decrements
   gate: Promise<void> | null = null; // when set, getManifest blocks on it (simulate in-flight)
+  pushGate: Promise<void> | null = null; // when set, the FIRST pushBlob blocks on it
+  pushes = 0;
 
   private mk(kind: string, email: string): string {
     return `${kind}:${email}:${this.n++}`;
@@ -157,6 +159,8 @@ class FakeBackend implements SyncApi, AuthApi, BillingApi {
     return { key, ciphertext: b.ciphertext, nonce: b.nonce, version: b.version, updated_at: String(b.version) };
   }
   async pushBlob(token: string, body: PushBody): Promise<PushResult> {
+    this.pushes++;
+    if (this.pushGate && this.pushes === 1) await this.pushGate;
     const email = this.auth(token);
     if (this.billingEnabled && !this.syncAllowed) throw new PaymentRequiredError();
     const m = this.bf(email);
@@ -1213,5 +1217,37 @@ describe("SyncManager — recovery key rotation (M3)", () => {
 
     const c = makeDevice(api, "C");
     await expect(c.mgr.recover("burn@example.com", used, "another-password")).rejects.toThrow();
+  });
+});
+
+describe("SyncManager — signing out mid-cycle must not corrupt the account", () => {
+  it("does not push a blob sealed under a zeroed key", async () => {
+    // logout() zeroes the ADK buffer in place, and a sync cycle holds that same reference
+    // across six-plus awaited round trips. Most of the time a mid-cycle sign-out is caught
+    // by the next pull, which fails to decrypt and aborts — but the FIRST sync of a new
+    // account performs no pulls at all (every blob is a create), so there is nothing to
+    // abort: tasks is pushed with the real key, logout lands, and settings and notes are
+    // then sealed under 32 zero bytes and accepted by the server (the access token was
+    // captured before sign-out, and logout is client-side). The account's settings and
+    // notes ciphertext is now undecryptable by every device, forever.
+    const api = new FakeBackend();
+    const a = makeDevice(api, "A", { tasks: [task("t1")], notesDoc: { v: "real notes" } });
+
+    let release!: () => void;
+    api.pushGate = new Promise<void>((r) => {
+      release = r;
+    });
+    const signup = a.mgr.signup("midflight@example.com", "pw");
+    await flush(); // reaches the gated first push (tasks)
+    await a.mgr.logout(); // lands between the tasks push and the settings encrypt
+    release();
+    api.pushGate = null;
+    await signup.catch(() => {});
+
+    // Every blob the interrupted cycle wrote must still open with the real key.
+    const b = makeDevice(api, "B");
+    await b.mgr.login("midflight@example.com", "pw");
+    expect(b.mgr.snapshot().lastError).toBeNull();
+    expect(b.mgr.snapshot().status).toBe("idle");
   });
 });

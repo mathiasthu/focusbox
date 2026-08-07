@@ -36,10 +36,17 @@ const OWNER_TAG_BYTES = 16;
 // in the sealed message disagrees. Binding the blob key and the owner tag into the AAD
 // makes a misrouted or cross-account ciphertext fail authentication instead.
 const AAD_BLOB = "fbsync01-blob";
-// The two ADK wrappers are also domain-separated, so a wrapper can never be replayed
-// into the other slot even if an attacker somehow controlled the wrapping key.
-const AAD_WRAP_PASSWORD = "fbsync01-wrap-password";
-const AAD_WRAP_RECOVERY = "fbsync01-wrap-recovery";
+
+// The two ADK wrappers deliberately DO NOT get associated data.
+//
+// Domain-separating them would buy almost nothing — `wrapped_adk` and
+// `recovery_wrapped_adk` are already sealed under different keys (encKey vs the recovery
+// wrap key), so neither can be unwrapped in the other's slot regardless. What it would
+// cost is the two worst lockouts available: once a new client re-wrapped, an older client
+// would fail `completeLogin` and tell the user their CORRECT password is wrong, and fail
+// `recoverWithKey` and tell a user holding a VALID recovery key — on the last-resort path
+// — that it doesn't work. Blob framing is where the binding actually stops an attack, so
+// that is where it is spent.
 
 /**
  * Accept ciphertexts sealed by pre-v0.2.19 clients, which used `aad = null`.
@@ -110,27 +117,21 @@ function deriveKeys(email: string, password: string): DerivedKeys {
 }
 
 // --- AEAD wrap/unwrap (XChaCha20-Poly1305): single base64(nonce ‖ ciphertext) string ---
-function aeadWrap(message: Uint8Array, key: Uint8Array, aad: Uint8Array): string {
+function aeadWrap(message: Uint8Array, key: Uint8Array): string {
   const nonce = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
-  const ct = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(message, aad, null, nonce, key);
+  const ct = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(message, null, null, nonce, key);
   const combined = new Uint8Array(nonce.length + ct.length);
   combined.set(nonce);
   combined.set(ct, nonce.length);
   return sodium.to_base64(combined);
 }
 
-function aeadUnwrap(wrapped: string, key: Uint8Array, aad: Uint8Array): Uint8Array {
+function aeadUnwrap(wrapped: string, key: Uint8Array): Uint8Array {
   const combined = sodium.from_base64(wrapped);
   const n = sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES;
   const nonce = combined.slice(0, n);
   const ct = combined.slice(n);
-  try {
-    return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null, ct, aad, nonce, key);
-  } catch (e) {
-    if (!ACCEPT_LEGACY_UNAUTHENTICATED_FRAMING) throw e;
-    // Pre-v0.2.19 wrapper (aad = null). Re-wrapped with AAD on the next password change.
-    return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null, ct, null, nonce, key);
-  }
+  return sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null, ct, null, nonce, key);
 }
 
 function recoveryWrapKey(recoveryKeyBytes: Uint8Array): Uint8Array {
@@ -186,12 +187,8 @@ export async function createAccount(email: string, password: string): Promise<Cr
   return {
     signup: {
       auth_hash: sodium.to_base64(authKey),
-      wrapped_adk: aeadWrap(adk, encKey, aadBytes([AAD_WRAP_PASSWORD])),
-      recovery_wrapped_adk: aeadWrap(
-        adk,
-        recoveryWrapKey(recoveryBytes),
-        aadBytes([AAD_WRAP_RECOVERY]),
-      ),
+      wrapped_adk: aeadWrap(adk, encKey),
+      recovery_wrapped_adk: aeadWrap(adk, recoveryWrapKey(recoveryBytes)),
       recovery_auth_hash: sodium.to_base64(recoveryAuthBytes(recoveryBytes)),
       kdf_params: kdfParams(),
     },
@@ -226,7 +223,7 @@ export function startLogin(email: string, password: string): LoginStart {
 export function completeLogin(encKey: Uint8Array, wrappedAdk: string): Session {
   ensureReady();
   // throws if the password is wrong (AEAD auth fails)
-  const adk = aeadUnwrap(wrappedAdk, encKey, aadBytes([AAD_WRAP_PASSWORD]));
+  const adk = aeadUnwrap(wrappedAdk, encKey);
   return { adk, encKey };
 }
 
@@ -273,11 +270,7 @@ export async function recoverWithKey(
     sodium.base64_variants.URLSAFE_NO_PADDING,
   );
   // returns the ADK
-  return aeadUnwrap(
-    recoveryWrappedAdk,
-    recoveryWrapKey(recoveryBytes),
-    aadBytes([AAD_WRAP_RECOVERY]),
-  );
+  return aeadUnwrap(recoveryWrappedAdk, recoveryWrapKey(recoveryBytes));
 }
 
 export interface RegeneratedRecovery {
@@ -305,11 +298,7 @@ export function regenerateRecoveryKey(adk: Uint8Array): RegeneratedRecovery {
   const recoveryBytes = sodium.randombytes_buf(KEY_BYTES);
   return {
     recoveryKey: sodium.to_base64(recoveryBytes, sodium.base64_variants.URLSAFE_NO_PADDING),
-    recovery_wrapped_adk: aeadWrap(
-      adk,
-      recoveryWrapKey(recoveryBytes),
-      aadBytes([AAD_WRAP_RECOVERY]),
-    ),
+    recovery_wrapped_adk: aeadWrap(adk, recoveryWrapKey(recoveryBytes)),
     recovery_auth_hash: sodium.to_base64(recoveryAuthBytes(recoveryBytes)),
   };
 }
@@ -324,7 +313,7 @@ export async function rewrapForNewPassword(
   const { encKey, authKey } = deriveKeys(email, newPassword);
   return {
     auth_hash: sodium.to_base64(authKey),
-    wrapped_adk: aeadWrap(adk, encKey, aadBytes([AAD_WRAP_PASSWORD])),
+    wrapped_adk: aeadWrap(adk, encKey),
     kdf_params: kdfParams(),
   };
 }

@@ -61,6 +61,7 @@ const SIGNED_OUT: SyncSnapshot = {
   hadNotesConflict: false,
   stashedOwners: [],
   dataSetAsideThisSession: false,
+  dataSetAsideReason: null,
   billingEnabled: false,
   syncEnabled: true,
   subscriptionStatus: "none",

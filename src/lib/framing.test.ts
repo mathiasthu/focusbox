@@ -182,6 +182,11 @@ class HostileServer implements SyncApi {
   async deleteBlob(_t: string, key: string): Promise<void> {
     this.blobs.delete(key);
   }
+  /** What the server actually holds now, decrypted. */
+  read<T>(key: string): T {
+    const b = this.blobs.get(key)!;
+    return JSON.parse(decryptBlob(b.ciphertext, b.nonce, adk, key)) as T;
+  }
 }
 
 const local = (over: Partial<LocalData> = {}): LocalData => ({
@@ -272,7 +277,12 @@ describe("future-timestamp clamp (sync)", () => {
     expect(t1.updated_at).toBeLessThanOrEqual(NOW + 24 * 60 * 60 * 1000);
   });
 
-  it("a tombstone still wins against a clamped future stamp", async () => {
+  it("writes the corrected stamp BACK to the server", async () => {
+    // The clamp is invisible to the `stableEq(merged, remote)` short-circuit — it compares
+    // against the already-normalized remote — so without forcing a push the poisoned value
+    // stays on the server. And because the clamp target is `now`, which advances every
+    // cycle, the item would be re-minted as the newest thing in the account on every sync:
+    // a deleted task outranking its own tombstone forever.
     const server = new HostileServer();
     const poisoned = Date.UTC(2099, 0, 1);
     server.seed(
@@ -280,16 +290,86 @@ describe("future-timestamp clamp (sync)", () => {
       { items: [{ id: "t1", text: "wedged", done: false, order: 0, updated_at: poisoned }] },
       1,
     );
+    await syncOnce({
+      api: server,
+      token: "t",
+      adk,
+      local: local({ tasks: [] }),
+      state: emptySyncState(),
+      now: NOW,
+    });
+    const stored = server.read<{ items: { updated_at: number }[] }>("tasks");
+    expect(stored.items[0].updated_at).toBe(NOW);
+  });
+
+  it("a delete sticks after the poisoned stamp has been repaired", async () => {
+    // The user-visible bug: delete the task, it comes back on the next sync, forever.
+    const server = new HostileServer();
+    const poisoned = Date.UTC(2099, 0, 1);
+    server.seed(
+      "tasks",
+      { items: [{ id: "t1", text: "wedged", done: false, order: 0, updated_at: poisoned }] },
+      1,
+    );
+    // Cycle 1: an honest device pulls, clamps, and repairs the server copy.
+    let res = await syncOnce({
+      api: server,
+      token: "t",
+      adk,
+      local: local({ tasks: [] }),
+      state: emptySyncState(),
+      now: NOW,
+    });
+
+    // The user deletes it. The tombstone is stamped LATER than the repaired value, which
+    // is exactly why the repair matters — against a re-minted `now` it never could be.
+    const deletedAt = NOW + 5_000;
+    res = await syncOnce({
+      api: server,
+      token: "t",
+      adk,
+      local: local({
+        tasks: [{ id: "t1", text: "wedged", done: false, order: 0, updated_at: deletedAt, deleted: true }],
+      }),
+      state: res.state,
+      now: deletedAt,
+    });
+    expect(res.local.tasks.find((t) => t.id === "t1")?.deleted).toBe(true);
+
+    // And it stays deleted on the next cycle rather than resurrecting.
+    res = await syncOnce({
+      api: server,
+      token: "t",
+      adk,
+      local: { ...local(), tasks: res.local.tasks },
+      state: res.state,
+      now: deletedAt + 5_000,
+    });
+    expect(res.local.tasks.find((t) => t.id === "t1")?.deleted).toBe(true);
+  });
+
+  it("does not push when nothing needed normalizing", async () => {
+    // The flip side: forcing a push on every cycle would be its own bug.
+    const server = new HostileServer();
+    server.seed("tasks", { items: [{ id: "t1", text: "ok", done: false, order: 0, updated_at: NOW - 1000 }] }, 1);
+    server.seed(KEY_NOTES, { doc: { real: "user notes" }, updated_at: 100 }, 1);
+    server.seed(KEY_SETTINGS, settings({ updated_at: 500 }), 1);
+    const state = {
+      versions: { tasks: 1, [KEY_NOTES]: 1, [KEY_SETTINGS]: 1 },
+      notesBaseUpdatedAt: 100,
+    };
     const res = await syncOnce({
       api: server,
       token: "t",
       adk,
       local: local({
-        tasks: [{ id: "t1", text: "wedged", done: false, order: 0, updated_at: NOW, deleted: true }],
+        tasks: [{ id: "t1", text: "ok", done: false, order: 0, updated_at: NOW - 1000 }],
+        notes: { doc: { real: "user notes" }, updated_at: 100 },
+        settings: settings({ updated_at: 500 }),
       }),
-      state: emptySyncState(),
+      state,
       now: NOW,
     });
-    expect(res.local.tasks.find((t) => t.id === "t1")?.deleted).toBe(true);
+    expect(res.state.versions).toEqual(state.versions); // no version bumped → nothing pushed
   });
 });

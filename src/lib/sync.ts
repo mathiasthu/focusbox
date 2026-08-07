@@ -58,8 +58,35 @@ function finite(n: unknown, fallback: number): number {
   return typeof n === "number" && Number.isFinite(n) ? n : fallback;
 }
 
-function normalizeTask(t: SyncedTask, now: number): SyncedTask {
-  return { ...t, updated_at: clampStamp(t.updated_at, 0, now), order: finite(t.order, 0) };
+/**
+ * Tracks whether ingest normalization actually rewrote anything this cycle.
+ *
+ * This has to feed the push decision, and the reason is the whole point of the clamp.
+ * The `stableEq(merged, remote)` short-circuit below compares the merge result against
+ * the ALREADY-NORMALIZED remote, so a clamp can never by itself make them differ — which
+ * means the corrected value is never written back and the server keeps the poisoned one.
+ * Because the clamp target is `now`, and `now` advances every cycle, the item is re-minted
+ * as the newest thing in the account on every single sync: a deleted task outranks its own
+ * tombstone forever, a note edit loses LWW forever, a setting reverts forever. Forcing the
+ * push repairs the stored value once, after which the user's next edit is simply newer and
+ * wins normally.
+ */
+interface Normalization {
+  rewrote: boolean;
+}
+
+function normalizeTask(t: SyncedTask, now: number, n: Normalization): SyncedTask {
+  const updated_at = clampStamp(t.updated_at, 0, now);
+  const order = finite(t.order, 0);
+  // NaN !== NaN, so a garbage value counts as rewritten too — which is what we want.
+  if (updated_at !== t.updated_at || order !== t.order) n.rewrote = true;
+  return { ...t, updated_at, order };
+}
+
+function normalizeStamp(raw: unknown, now: number, n: Normalization): number {
+  const value = clampStamp(raw, 0, now);
+  if (value !== raw) n.rewrote = true;
+  return value;
 }
 
 async function pull<T>(
@@ -166,13 +193,14 @@ export async function syncOnce(opts: {
     for (let attempt = 0; attempt < MAX_CONFLICT_RETRIES; attempt++) {
       let remote: SyncedTask[] = [];
       let baseV = 0;
+      const norm: Normalization = { rewrote: false };
       if (serverV > 0) {
         const pr = await pull<TasksBlob>(api, token, adk, KEY_TASKS);
-        remote = (pr.value.items ?? []).map((t) => normalizeTask(t, now));
+        remote = (pr.value.items ?? []).map((t) => normalizeTask(t, now, norm));
         baseV = pr.version;
       }
       const merged = mergeTasks(local.tasks, remote);
-      if (serverV > 0 && stableEq(merged, remote)) {
+      if (serverV > 0 && !norm.rewrote && stableEq(merged, remote)) {
         local.tasks = merged;
         state.versions[KEY_TASKS] = serverV;
         break;
@@ -198,13 +226,14 @@ export async function syncOnce(opts: {
     for (let attempt = 0; attempt < MAX_CONFLICT_RETRIES; attempt++) {
       let remote: SettingsValue | null = null;
       let baseV = 0;
+      const norm: Normalization = { rewrote: false };
       if (serverV > 0) {
         const pr = await pull<SettingsValue>(api, token, adk, KEY_SETTINGS);
-        remote = { ...pr.value, updated_at: clampStamp(pr.value.updated_at, 0, now) };
+        remote = { ...pr.value, updated_at: normalizeStamp(pr.value.updated_at, now, norm) };
         baseV = pr.version;
       }
       const merged = remote ? mergeSettings(local.settings, remote) : local.settings;
-      if (serverV > 0 && stableEq(merged, remote)) {
+      if (serverV > 0 && !norm.rewrote && stableEq(merged, remote)) {
         local.settings = merged;
         state.versions[KEY_SETTINGS] = serverV;
         break;
@@ -230,9 +259,10 @@ export async function syncOnce(opts: {
     for (let attempt = 0; attempt < MAX_CONFLICT_RETRIES; attempt++) {
       let remote: NotesValue | null = null;
       let baseV = 0;
+      const norm: Normalization = { rewrote: false };
       if (serverV > 0) {
         const pr = await pull<NotesValue>(api, token, adk, KEY_NOTES);
-        remote = { ...pr.value, updated_at: clampStamp(pr.value.updated_at, 0, now) };
+        remote = { ...pr.value, updated_at: normalizeStamp(pr.value.updated_at, now, norm) };
         baseV = pr.version;
       }
       if (!remote) {
@@ -254,7 +284,7 @@ export async function syncOnce(opts: {
           tolerateConflictCopyFailure(e);
         }
       }
-      if (stableEq(res.current, remote)) {
+      if (!norm.rewrote && stableEq(res.current, remote)) {
         local.notes = res.current;
         state.versions[KEY_NOTES] = serverV;
         state.notesBaseUpdatedAt = res.current.updated_at;

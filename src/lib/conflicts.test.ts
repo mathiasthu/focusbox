@@ -92,8 +92,13 @@ describe("conflicts", () => {
     const [backup] = api.conflictKeys();
     expect(backup.startsWith("notes_conflict:")).toBe(true);
     const suffix = backup.slice("notes_conflict:".length);
+    // Nothing derived from the device or from when the note was edited. (Asserting on the
+    // shape of the random id itself would be flaky — a hex id can contain a long digit run
+    // by chance — so assert the absence of the actual values that used to leak.)
     expect(suffix).not.toContain("-");
-    expect(suffix).not.toMatch(/\d{10,}/); // no epoch-ms timestamp
+    expect(suffix).not.toContain("9000"); // the restore's `now`
+    expect(suffix).not.toContain("5000"); // the current note's updated_at
+    expect(suffix).not.toContain("devX");
   });
 
   it("refuses a blob the server labelled with a different key", async () => {

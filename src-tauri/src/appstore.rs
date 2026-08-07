@@ -81,7 +81,18 @@ fn write_at(
     // the previous store intact instead of a truncated one — this file holds the only copy
     // of the user's tasks and notes.
     let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, &bytes).map_err(|e| format!("could not write {FILE_NAME}: {e}"))?;
+    {
+        use std::io::Write;
+        let mut f = fs::File::create(&tmp)
+            .map_err(|e| format!("could not write {FILE_NAME}: {e}"))?;
+        f.write_all(&bytes)
+            .map_err(|e| format!("could not write {FILE_NAME}: {e}"))?;
+        // Without this the rename can be durable while the temp file's CONTENT is not, so a
+        // power loss can leave a zero-length focusbox.json — which is the user's only copy
+        // of their tasks and notes.
+        f.sync_all()
+            .map_err(|e| format!("could not flush {FILE_NAME}: {e}"))?;
+    }
     fs::rename(&tmp, path).map_err(|e| format!("could not replace {FILE_NAME}: {e}"))?;
     Ok(())
 }

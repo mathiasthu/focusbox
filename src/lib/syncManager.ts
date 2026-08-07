@@ -110,6 +110,17 @@ export interface SyncSnapshot {
   /** set when THIS session's sign-in set the working data aside, so the UI can explain
    * why the app looks empty instead of leaving the user to guess. */
   dataSetAsideThisSession: boolean;
+  /**
+   * WHY it was set aside, because the two cases warrant different words.
+   *
+   * "other-account" is certain: a real owner tag was on disk and it wasn't this account's.
+   * "unknown" is a guess — the install had no ownership marker at all, which covers both a
+   * previous account that signed out under a build predating the marker AND (far more
+   * commonly) someone who has used Focusbox locally for months and is only now creating
+   * their first account. Telling that second person their own notes "belong to a different
+   * account" is simply false, and it lands at the worst possible moment.
+   */
+  dataSetAsideReason: "other-account" | "unknown" | null;
   // --- subscription (from GET /account/me) ---
   billingEnabled: boolean; // false → free/open, no billing UI
   syncEnabled: boolean; // may this account write to sync right now?
@@ -208,6 +219,7 @@ export class SyncManager {
   private hadNotesConflict = false;
   private stashedOwners: StashedOwner[] = [];
   private dataSetAsideThisSession = false;
+  private dataSetAsideReason: "other-account" | "unknown" | null = null;
 
   private billingEnabled = false;
   private syncEnabled = true; // assume open until /account/me says otherwise
@@ -237,6 +249,7 @@ export class SyncManager {
       hadNotesConflict: this.hadNotesConflict,
       stashedOwners: this.stashedOwners,
       dataSetAsideThisSession: this.dataSetAsideThisSession,
+      dataSetAsideReason: this.dataSetAsideReason,
       billingEnabled: this.billingEnabled,
       syncEnabled: this.syncEnabled,
       subscriptionStatus: this.subscriptionStatus,
@@ -433,6 +446,7 @@ export class SyncManager {
     // stashedOwners is deliberately NOT cleared: the set-aside data is still on disk and
     // still restorable, so the list has to survive sign-out the same way the marker does.
     this.dataSetAsideThisSession = false;
+    this.dataSetAsideReason = null;
     this.billingEnabled = false;
     this.syncEnabled = true;
     this.subscriptionStatus = "none";
@@ -632,7 +646,7 @@ export class SyncManager {
    * as signup, with `recoveryKeyIsRotation` set so the copy can say the old one is dead.
    */
   async regenerateRecoveryKey(): Promise<void> {
-    const adk = this.adk;
+    const adk = this.adkForUse();
     if (!adk) throw new Error("locked");
     const next = regenerateRecoveryKey(adk);
     await this.authedCall((t) =>
@@ -700,12 +714,16 @@ export class SyncManager {
     // setState in the app, so a getLocal() read before it flushes would still return the
     // data we just parked and push THAT instead.
     this.localOverride = restored;
-    // Stamp both clocks forward so the restore wins LWW against the server's current
-    // copy rather than being silently overwritten by it. The server's note is not lost —
-    // resolveNotes keeps it as a conflict copy, listed under "Notes backups".
+    // Stamp both clocks forward so the restore wins LWW against the server's current copy
+    // rather than being silently overwritten by it. What protects the note being displaced
+    // is the stash entry parked just above — NOT a conflict copy: resolveNotes only emits
+    // one when BOTH sides changed since the synced baseline, and in the steady state
+    // notesBaseUpdatedAt already equals the remote's updated_at, so remoteChanged is false
+    // and no copy is written.
     this.tasksUpdatedAt = now;
     this.notesUpdatedAt = now;
     this.dataSetAsideThisSession = false;
+    this.dataSetAsideReason = null;
     this.d.onMerged(restored);
     await this.refreshStashes();
     this.scheduleSync();
@@ -732,6 +750,7 @@ export class SyncManager {
     };
     this.localOverride = null;
     this.dataSetAsideThisSession = false;
+    this.dataSetAsideReason = null;
     this.d.onMerged(cleared);
     await this.refreshStashes();
   }
@@ -744,7 +763,7 @@ export class SyncManager {
   }
 
   async getConflict(key: string): Promise<ConflictContent> {
-    const adk = this.adk;
+    const adk = this.adkForUse();
     if (!adk) throw new Error("locked");
     return this.authedCall((t) => getConflictFn(this.d.api, t, adk, key));
   }
@@ -756,7 +775,7 @@ export class SyncManager {
   /** Restore a conflict copy as the current note (backing up the current note first).
    * Applies the restored doc into the app and pushes it as the new current note. */
   async restoreConflict(key: string): Promise<void> {
-    const adk = this.adk;
+    const adk = this.adkForUse();
     if (!adk) throw new Error("locked");
     const now = this.d.now();
     const current = this.buildLocalData().notes;
@@ -783,7 +802,7 @@ export class SyncManager {
   /** Push a specific notes value to KEY_NOTES authoritatively (independent of getLocal()).
    * A concurrent-writer 409 is left for the next normal sync to reconcile via LWW. */
   private async pushNotes(note: NotesValue): Promise<void> {
-    const adk = this.adk;
+    const adk = this.adkForUse();
     if (!adk) return;
     const base = this.state.versions[KEY_NOTES] ?? 0;
     const { ciphertext, nonce } = encryptBlob(JSON.stringify(note), adk, KEY_NOTES);
@@ -814,7 +833,7 @@ export class SyncManager {
     if ((import.meta as { env?: { PROD?: boolean } }).env?.PROD) {
       throw new Error("seedConflictForTest is test-only");
     }
-    const adk = this.adk;
+    const adk = this.adkForUse();
     if (!adk) throw new Error("locked");
     const key = newNotesConflictKey();
     const { ciphertext, nonce } = encryptBlob(JSON.stringify(value), adk, key);
@@ -825,6 +844,22 @@ export class SyncManager {
   }
 
   // ---- internals ----
+
+  /**
+   * A private copy of the ADK for one operation.
+   *
+   * logout() zeroes the manager's buffer in place. Anything that captured the shared
+   * reference and then awaited — a sync cycle makes six-plus round trips — would find its
+   * key silently turned into 32 zero bytes mid-flight, and `encryptBlob` would seal the
+   * next push under that zero key. The blob is well-formed and the server accepts it (the
+   * access token is still valid; logout is client-side), so the account's tasks/notes
+   * ciphertext is replaced by something no device can ever decrypt. Copying is cheap and
+   * removes the race entirely; zeroing still does its (modest) job for the manager's own
+   * copy, which is the only one left once persist.clear() has run.
+   */
+  private adkForUse(): Uint8Array | null {
+    return this.adk ? new Uint8Array(this.adk) : null;
+  }
 
   private buildLocalData(): LocalData {
     const s = this.localOverride ?? this.d.getLocal();
@@ -855,8 +890,8 @@ export class SyncManager {
   }
 
   private async runCycle(): Promise<void> {
-    if (!this.adk) return;
-    const adk = this.adk;
+    const adk = this.adkForUse();
+    if (!adk) return;
     const res = await this.authedCall((token) =>
       syncOnce({
         api: this.d.api,
@@ -966,6 +1001,7 @@ export class SyncManager {
     if (rec.tag === null || rec.tag === tag) {
       this.localOverride = null;
       this.dataSetAsideThisSession = false;
+      this.dataSetAsideReason = null;
       await this.d.owner.save({ ...rec, tag });
       return local;
     }
@@ -993,6 +1029,7 @@ export class SyncManager {
     // The app is about to look empty (or to change under the user). Say so — silently
     // swapping the working data is what made this indistinguishable from data loss.
     this.dataSetAsideThisSession = local.tasks.length > 0 || local.notesDoc !== null;
+    this.dataSetAsideReason = rec.tag === UNKNOWN_OWNER_TAG ? "unknown" : "other-account";
     this.stashedOwners = describeStash(stash);
     this.d.onMerged(mySnapshot);
     return mySnapshot;

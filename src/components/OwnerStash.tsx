@@ -45,8 +45,12 @@ export default function OwnerStash({ sync }: { sync: SyncController }) {
     <div className="account__stash">
       {sync.dataSetAsideThisSession && (
         <span className="setting__hint account__stash-notice">
-          The tasks and notes that were here belong to a different account, so they've been
-          set aside on this device — nothing was deleted. Restore them below if they're yours.
+          {sync.dataSetAsideReason === "unknown"
+            ? // Don't claim the data belongs to someone else here — we genuinely don't know,
+              // and the likeliest person reading this is someone who used Focusbox locally
+              // for a long time and has only just made their first account.
+              "This device already had tasks and notes, and Focusbox couldn't tell which account they belonged to. Nothing was deleted — they've been set aside rather than added to this account. If they're yours, restore them below."
+            : "The tasks and notes that were here belong to a different account, so they've been set aside on this device — nothing was deleted. Restore them below if they're yours."}
         </span>
       )}
       <button className="account__link" onClick={() => setExpanded((v) => !v)}>

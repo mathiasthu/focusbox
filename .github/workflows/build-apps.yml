@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v6 line (2025-11-13); not the v4 tag
 
       - name: Set up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -82,7 +82,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v6 line (2025-11-13); not the v4 tag
 
       - name: Set up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -103,6 +103,10 @@ jobs:
           name: frontend-dist
           path: dist
 
+      # COUPLED to the --config override below: with beforeBuildCommand blanked, vite and
+      # esbuild never run in this job, which is what makes --ignore-scripts safe. Drop the
+      # override and `npm run build` runs here under --ignore-scripts, where esbuild fails
+      # outright ("you installed esbuild for another platform").
       # --ignore-scripts: the only thing needed from npm in this job is the Tauri CLI
       # binary. Nothing here should execute package install hooks, and this job is the one
       # that holds the signing key. (Residual exposure, unavoidable: `tauri build` runs
@@ -143,8 +147,11 @@ jobs:
           prerelease: false
           includeUpdaterJson: true
           # tauri.ci.conf.json blanks beforeBuildCommand so the bundler uses the dist/
-          # artifact built in `checks` rather than re-running vite here.
-          args: ${{ matrix.args }} --config tauri.ci.conf.json
+          # artifact built in `checks` rather than re-running vite here. The path is
+          # REPO-ROOT-relative on purpose: the CLI reads --config straight off the process
+          # cwd with no tauri-dir join, and tauri-action runs the build from the checkout
+          # root. `--config tauri.ci.conf.json` fails at argument-parse time.
+          args: ${{ matrix.args }} --config src-tauri/tauri.ci.conf.json
 
       - name: Upload installer artifact (for manual runs)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
