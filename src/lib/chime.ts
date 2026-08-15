@@ -132,20 +132,90 @@ export function storeChimeSound(id: SoundId): void {
 type AudioCtor = typeof AudioContext;
 
 let ctx: AudioContext | null = null;
+let warned = false;
 
-function getCtx(): AudioContext | null {
+function newCtx(): AudioContext | null {
   if (typeof window === "undefined") return null;
   const Ctor: AudioCtor | undefined =
     window.AudioContext ?? (window as { webkitAudioContext?: AudioCtor }).webkitAudioContext;
   if (!Ctor) return null;
-  if (!ctx) {
-    try {
-      ctx = new Ctor();
-    } catch {
-      return null;
-    }
+  try {
+    return new Ctor();
+  } catch {
+    return null;
   }
+}
+
+function getCtx(): AudioContext | null {
+  if (!ctx) ctx = newCtx();
   return ctx;
+}
+
+// WebKit caps how many AudioContexts a page may hold, so a context we're about to
+// replace has to be closed, not just forgotten — otherwise a run of wedged contexts
+// leaks until the browser refuses to hand out any more.
+function dropCtx(ac: AudioContext): void {
+  if (ctx === ac) ctx = null;
+  try {
+    void ac.close().catch(() => {});
+  } catch {
+    // Some engines can throw synchronously here too; either way the context is
+    // done, so there's nothing left to clean up.
+  }
+}
+
+// Without this, a wedged audio device is indistinguishable from a working one in
+// devtools — playChime never throws, so silence is the only symptom.
+function warnOnce(err: unknown): void {
+  if (warned) return;
+  warned = true;
+  console.warn("Focusbox: timer sound could not be played.", err);
+}
+
+// A torn-down context throws InvalidStateError from createOscillator, and playChime
+// is called from Timer's animation-frame callback, where an uncaught exception would
+// take the frame with it. Catch it here so a dead context degrades to silence.
+function trySchedule(ac: AudioContext, voices: Voice[]): boolean {
+  try {
+    schedule(ac, voices, ac.currentTime + 0.02);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// resume() is specified to reject rather than throw on a closed context, but the
+// whole point of the callers below is that playChime is called from an animation
+// frame and must not throw, so don't take an engine's word for it.
+function tryResume(ac: AudioContext): Promise<void> {
+  try {
+    return ac.resume();
+  } catch (err) {
+    return Promise.reject(err);
+  }
+}
+
+// Last resort, called once a context has proven itself wedged or torn down: drop
+// the cached context, build a fresh one, and play on that instead. This must never
+// call itself and must never rebuild in a loop — a machine that can't produce a
+// working context at all just falls silent rather than spinning.
+function rebuildAndPlay(voices: Voice[], err?: unknown): void {
+  if (ctx) dropCtx(ctx);
+  const fresh = getCtx();
+  if (!fresh) {
+    warnOnce(err);
+    return;
+  }
+  if (fresh.state === "running") {
+    if (!trySchedule(fresh, voices)) warnOnce(err);
+    return;
+  }
+  void tryResume(fresh).then(
+    () => {
+      if (!trySchedule(fresh, voices)) warnOnce(err);
+    },
+    (rejectErr: unknown) => warnOnce(rejectErr),
+  );
 }
 
 function schedule(ac: AudioContext, voices: Voice[], t0: number) {
@@ -170,10 +240,26 @@ function schedule(ac: AudioContext, voices: Voice[], t0: number) {
 
 /** Play a timer sound once. Safe to call anywhere — no-ops if WebAudio is missing. */
 export function playChime(sound: SoundId = DEFAULT_SOUND): void {
+  const voices = VOICES[normalizeSoundId(sound)];
   const ac = getCtx();
   if (!ac) return;
-  // Autoplay policies start the context suspended until a user gesture. By the time
-  // a timer can finish the user has clicked Start, so this resolves; ignore failures.
-  if (ac.state === "suspended") void ac.resume().catch(() => {});
-  schedule(ac, VOICES[normalizeSoundId(sound)], ac.currentTime + 0.02);
+  // Notes booked onto a context that is not rendering are never heard, and nothing
+  // ever comes back to play them later — so the context must be started BEFORE
+  // anything is scheduled. "suspended" is not the only non-running state: WebKit on
+  // Apple platforms also uses "interrupted" after the machine sleeps or another app
+  // takes the audio session.
+  if (ac.state === "running") {
+    if (!trySchedule(ac, voices)) rebuildAndPlay(voices);
+    return;
+  }
+  void tryResume(ac).then(
+    () => {
+      if (ac.state === "running") {
+        if (!trySchedule(ac, voices)) rebuildAndPlay(voices);
+      } else {
+        rebuildAndPlay(voices);
+      }
+    },
+    (err: unknown) => rebuildAndPlay(voices, err),
+  );
 }

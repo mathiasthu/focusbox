@@ -1,5 +1,5 @@
 import "./testDomShim";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getChime,
   storeChime,
@@ -173,11 +173,23 @@ class StubGain {
   connect() {}
 }
 
+// Every StubAudioContext ever constructed, in construction order — lets a test
+// confirm a rebuild happened by checking a second one showed up.
+const contexts: StubAudioContext[] = [];
+
 class StubAudioContext {
+  // Kept a plain mutable string (not a union) so a test can push it into WebKit's
+  // non-standard "interrupted" state, which nothing in the real AudioContext type
+  // acknowledges.
   state = "suspended";
   currentTime = 5; // non-zero, so "scheduled relative to now" bugs surface
   destination = {};
+  resumeCalls = 0;
+  resumeRejects = false;
   private pendingOsc: StubOsc | null = null;
+  constructor() {
+    contexts.push(this);
+  }
   createOscillator() {
     const o = new StubOsc();
     this.pendingOsc = o;
@@ -189,7 +201,12 @@ class StubAudioContext {
     return g;
   }
   resume() {
+    this.resumeCalls++;
+    if (this.resumeRejects) return Promise.reject(new Error("not allowed"));
     this.state = "running";
+    return Promise.resolve();
+  }
+  close() {
     return Promise.resolve();
   }
 }
@@ -212,8 +229,9 @@ describe("playChime", () => {
   };
 
   for (const { id, label } of SOUNDS) {
-    it(`schedules ${label}`, () => {
+    it(`schedules ${label}`, async () => {
       playChime(id);
+      await Promise.resolve();
       expect(started).toHaveLength(counts[id]);
       for (const v of started) {
         // Everything is scheduled in the future, audible, sane in level, and stops
@@ -232,27 +250,31 @@ describe("playChime", () => {
     });
   }
 
-  it("gives each sound a distinct fingerprint", () => {
-    const prints = SOUNDS.map(({ id }) => {
-      started.length = 0;
-      playChime(id);
-      return JSON.stringify(started.map((v) => [v.type, v.hz, v.start]));
-    });
-    expect(new Set(prints).size).toBe(SOUNDS.length);
-  });
-
-  it("keeps every sound to sine partials (the set is acoustic, not a beeper)", () => {
+  it("gives each sound a distinct fingerprint", async () => {
+    const prints: string[] = [];
     for (const { id } of SOUNDS) {
       started.length = 0;
       playChime(id);
+      await Promise.resolve();
+      prints.push(JSON.stringify(started.map((v) => [v.type, v.hz, v.start])));
+    }
+    expect(new Set(prints).size).toBe(SOUNDS.length);
+  });
+
+  it("keeps every sound to sine partials (the set is acoustic, not a beeper)", async () => {
+    for (const { id } of SOUNDS) {
+      started.length = 0;
+      playChime(id);
+      await Promise.resolve();
       expect(started.every((v) => v.type === "sine")).toBe(true);
     }
   });
 
-  it("gives every voice a non-zero attack, and the bowl a swell rather than a strike", () => {
+  it("gives every voice a non-zero attack, and the bowl a swell rather than a strike", async () => {
     for (const { id } of SOUNDS) {
       started.length = 0;
       playChime(id);
+      await Promise.resolve();
       // A zero-length attack is an audible click, so nothing may start at full level.
       expect(started.every((v) => v.attack > 0)).toBe(true);
       const slowest = Math.max(...started.map((v) => v.attack));
@@ -261,11 +283,89 @@ describe("playChime", () => {
     }
   });
 
-  it("falls back to the default sound for an unknown id and resumes a suspended context", () => {
+  it("falls back to the default sound for an unknown id and resumes a suspended context", async () => {
     playChime("marimba" as SoundId); // retired, so it must not resolve to anything
+    await Promise.resolve();
     const bogus = [...started];
     started.length = 0;
     playChime("bell");
+    await Promise.resolve();
     expect(bogus.map((v) => v.hz)).toEqual(started.map((v) => v.hz));
+  });
+});
+
+// ---- recovery: a wedged or torn-down context must not go silent forever ----
+
+// ctx and warned are module-level singletons in chime.ts, so the only way to test
+// the recovery paths in isolation — without earlier tests' warmed-up context
+// leaking in — is to reset the module registry and re-import fresh each time.
+async function freshChime() {
+  vi.resetModules();
+  contexts.length = 0;
+  started.length = 0;
+  const mod = await import("./chime");
+  return mod.playChime;
+}
+
+describe("playChime recovers a wedged audio context", () => {
+  it("resumes a context WebKit left interrupted", async () => {
+    const playChime = await freshChime();
+    // Warm the singleton so there is a cached, already-constructed context to wedge.
+    playChime("bell");
+    await Promise.resolve();
+    const ac = contexts[0];
+
+    ac.state = "interrupted"; // WebKit's non-standard state after sleep/interruption
+    ac.resumeCalls = 0;
+    started.length = 0;
+
+    playChime("bell");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(ac.resumeCalls).toBe(1);
+    expect(ac.state).toBe("running");
+    expect(started).toHaveLength(6); // bell: 3 partials x 2 strikes
+    for (const v of started) expect(v.start).toBeGreaterThanOrEqual(ac.currentTime);
+  });
+
+  it("rebuilds the context when resume is refused", async () => {
+    const playChime = await freshChime();
+    playChime("bell");
+    await Promise.resolve();
+    const first = contexts[0];
+
+    first.state = "suspended";
+    first.resumeRejects = true;
+    started.length = 0;
+
+    playChime("bell");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(contexts).toHaveLength(2);
+    const second = contexts[1];
+    expect(second.state).toBe("running");
+    expect(started).toHaveLength(6);
+  });
+
+  it("does not throw out of the animation frame when the context is torn down", async () => {
+    const playChime = await freshChime();
+    playChime("bell");
+    await Promise.resolve();
+    const first = contexts[0];
+
+    first.createOscillator = () => {
+      throw new Error("InvalidStateError: context is closed");
+    };
+    started.length = 0;
+
+    expect(() => playChime("bell")).not.toThrow();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(contexts).toHaveLength(2);
+    expect(contexts[1].state).toBe("running");
+    expect(started).toHaveLength(6);
   });
 });

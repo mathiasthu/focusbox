@@ -59,26 +59,45 @@ export default function Timer({ onTimeUpReset, onReset, onTick, onFinish }: Prop
   // over the onFinish prop from the render that started the run.
   const onFinishRef = useRef(onFinish);
   onFinishRef.current = onFinish;
+  // Guards against the rAF loop and the fallback interval below both noticing the
+  // countdown ran out and firing onFinish twice for the same run.
+  const firedRef = useRef(false);
 
   // Timestamp-driven countdown: compute remaining from a target end time on
   // every animation frame. Accurate (no setInterval drift) and smooth.
   useEffect(() => {
     if (!running) return;
     let raf = 0;
+    const finish = () => {
+      if (firedRef.current) return;
+      firedRef.current = true;
+      setRemainingMs(0);
+      setRunning(false);
+      setFinished(true);
+      onFinishRef.current?.();
+    };
     const tick = () => {
       const remaining = endRef.current - Date.now();
       if (remaining <= 0) {
-        setRemainingMs(0);
-        setRunning(false);
-        setFinished(true);
-        onFinishRef.current?.();
+        finish();
         return;
       }
       setRemainingMs(remaining);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    // rAF stops while the window is hidden, occluded, or the machine is asleep, so
+    // left on its own the countdown only notices it ran out once the user comes
+    // back to it. This interval keeps ticking through that gap so the sound lands
+    // when the time is actually up, not whenever the window happens to wake — the
+    // firedRef guard above is what stops this and the rAF loop both firing onFinish.
+    const interval = setInterval(() => {
+      if (endRef.current - Date.now() <= 0) finish();
+    }, 1000);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearInterval(interval);
+    };
   }, [running]);
 
   const durationMs = durationSec * 1000;
@@ -117,6 +136,7 @@ export default function Timer({ onTimeUpReset, onReset, onTick, onFinish }: Prop
   function start() {
     if (remainingMs <= 0) return;
     endRef.current = Date.now() + remainingMs;
+    firedRef.current = false;
     setFinished(false);
     setRunning(true);
   }
@@ -139,6 +159,7 @@ export default function Timer({ onTimeUpReset, onReset, onTick, onFinish }: Prop
     setRemainingMs(sec * 1000);
     setFinished(false);
     endRef.current = Date.now() + sec * 1000;
+    firedRef.current = false;
     setRunning(true);
   }
 
