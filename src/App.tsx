@@ -2,13 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Editor } from "@tiptap/react";
 import Timer from "./components/Timer";
 import TaskList from "./components/TaskList";
+import MobileNotesChecklist from "./components/MobileNotesChecklist";
 import Notes, { LINE_DRAG_MIME } from "./components/Notes";
 import FocusCard from "./components/FocusCard";
 import Settings from "./components/Settings";
 import SpotifyPlayer from "./components/SpotifyPlayer";
 import UpdateBanner from "./components/UpdateBanner";
 import { checkForUpdate, installUpdateAndRestart, type UpdateInfo } from "./lib/updater";
-import { loadState, saveState, type NotesDoc } from "./lib/store";
+import { isTauri, loadState, saveState, type NotesDoc } from "./lib/store";
 import { getFocusedTask, clearFocused, markFocusedDone, clearDone } from "./lib/focusedLine";
 import type { SyncedTask } from "./lib/syncTypes";
 import { reconcileTasks, visibleTasks, type VisibleTask } from "./lib/taskMap";
@@ -49,6 +50,9 @@ import { isDemo } from "./lib/demo";
 export default function App() {
   const demo = isDemo();
   const [loaded, setLoaded] = useState(false);
+  const [mobileWeb, setMobileWeb] = useState(
+    () => !isTauri && window.matchMedia("(max-width: 700px)").matches,
+  );
   const [tasks, setTasks] = useState<SyncedTask[]>([]);
   const [notesDoc, setNotesDoc] = useState<NotesDoc>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -71,6 +75,14 @@ export default function App() {
   const editorRef = useRef<Editor | null>(null);
   const [lineDragging, setLineDragging] = useState(false);
   const focusTask = getFocusedTask(notesDoc);
+
+  useEffect(() => {
+    if (isTauri) return;
+    const media = window.matchMedia("(max-width: 700px)");
+    const onChange = () => setMobileWeb(media.matches);
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, []);
 
   // Cloud sync (optional). getLocal reads current state; onMerged applies a merged
   // result back. The hook keeps both in refs, so passing fresh closures each render
@@ -359,7 +371,15 @@ export default function App() {
   }
 
   return (
-    <div className="app">
+    <div className={mobileWeb ? "mobile-notes-app" : "app"}>
+      {mobileWeb ? (
+        <MobileNotesChecklist
+          doc={notesDoc}
+          onChange={updateNotes}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
+      ) : (
+      <>
       <aside className="app__focus">
         <svg className="wordmark" viewBox="35 44 452 60" role="img" aria-label="Focusbox" fill="none">
           <title>Focusbox</title>
@@ -416,6 +436,8 @@ export default function App() {
           focusDone={!!focusTask?.done}
         />
       </main>
+      </>
+      )}
 
       <Settings
         open={settingsOpen}
