@@ -1,5 +1,30 @@
 mod appstore;
+mod focusguard;
 mod spotify;
+mod todoist;
+
+/// Every app command, in one place so the ACL test below exercises the same list `run()`
+/// registers. Each one must also be listed in build.rs and granted in capabilities/*.json.
+macro_rules! app_commands {
+    () => {
+        tauri::generate_handler![
+            crate::spotify::spotify_control,
+            crate::spotify::spotify_state,
+            crate::appstore::app_store_read,
+            crate::appstore::app_store_write,
+            crate::focusguard::guard_supported,
+            crate::focusguard::guard_set_config,
+            crate::focusguard::get_nudge_state,
+            crate::focusguard::nudge_resolve,
+            crate::focusguard::guard_log_newtask,
+            crate::focusguard::guard_stats,
+            crate::todoist::todoist_status,
+            crate::todoist::todoist_set_token,
+            crate::todoist::todoist_clear_token,
+            crate::todoist::park
+        ]
+    };
+}
 
 /// Confine the webview to the app's own origin.
 ///
@@ -65,12 +90,20 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_process::init())
-        .manage(appstore::StoreLock::default());
+        .manage(appstore::StoreLock::default())
+        .manage(std::sync::Arc::new(focusguard::GuardState::default()))
+        .manage(std::sync::Arc::new(todoist::Todoist::default()));
 
     // Window-state: desktop-only. Restores the last window position/size on
     // launch and saves it as the window moves/resizes/closes.
+    // The focus-guard nudge positions itself over the current monitor every time it opens,
+    // so it must not get a remembered position/size restored on top of that.
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
+    let builder = builder.plugin(
+        tauri_plugin_window_state::Builder::default()
+            .with_denylist(&[focusguard::NUDGE_LABEL])
+            .build(),
+    );
 
     // Auto-updater: desktop-only (check on launch, sign-verified, prompt-to-restart).
     #[cfg(desktop)]
@@ -88,12 +121,93 @@ pub fn run() {
     ));
 
     builder
-        .invoke_handler(tauri::generate_handler![
-            spotify::spotify_control,
-            spotify::spotify_state,
-            appstore::app_store_read,
-            appstore::app_store_write
-        ])
+        .setup(|app| {
+            focusguard::init(app.handle());
+            todoist::init(app.handle());
+            Ok(())
+        })
+        .invoke_handler(app_commands!())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod acl_tests {
+    //! The app commands are behind the ACL now (see build.rs). A command missing from a
+    //! capability fails only at runtime, as "not allowed by ACL", so pin the grants here
+    //! against the real generated context.
+    use std::sync::Arc;
+    use tauri::test::{get_ipc_response, mock_builder, INVOKE_KEY};
+
+    fn call(w: &tauri::WebviewWindow<tauri::test::MockRuntime>, cmd: &str) -> Result<serde_json::Value, String> {
+        let res = get_ipc_response(
+            w,
+            tauri::webview::InvokeRequest {
+                cmd: cmd.into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: if cfg!(windows) { "http://tauri.localhost" } else { "tauri://localhost" }
+                    .parse()
+                    .unwrap(),
+                body: tauri::ipc::InvokeBody::default(),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.to_string(),
+            },
+        );
+        res.map(|b| b.deserialize::<serde_json::Value>().unwrap()).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn main_and_nudge_windows_get_exactly_their_commands() {
+        let app = mock_builder()
+            .manage(crate::appstore::StoreLock::default())
+            .manage(Arc::new(crate::focusguard::GuardState::default()))
+            .manage(Arc::new(crate::todoist::Todoist::default()))
+            .invoke_handler(app_commands!())
+            // `test = true` skips the Info.plist embed, which run()'s context already did.
+            .build(tauri::generate_context!(test = true))
+            .expect("build mock app");
+        let main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
+        let nudge = tauri::WebviewWindowBuilder::new(&app, "nudge", Default::default()).build().unwrap();
+
+        let denied = |r: Result<serde_json::Value, String>| matches!(r, Err(e) if e.contains("not allowed"));
+
+        // Main: its commands go through. Only commands with required arguments are called
+        // with an empty body, so they stop at argument parsing (an error that is not an ACL
+        // denial) and nothing touches the real store, Keychain or Spotify.
+        assert!(call(&main, "guard_supported").is_ok());
+        for cmd in [
+            "spotify_control",
+            "app_store_write",
+            "guard_set_config",
+            "guard_log_newtask",
+            "guard_stats",
+            "todoist_set_token",
+            "park",
+        ] {
+            let r = call(&main, cmd);
+            assert!(r.is_err() && !denied(r.clone()), "main must reach {cmd}: {r:?}");
+        }
+        // The nudge-only commands are refused to main.
+        assert!(denied(call(&main, "get_nudge_state")));
+        assert!(denied(call(&main, "nudge_resolve")));
+
+        // Nudge: its payload, nothing else.
+        assert_eq!(call(&nudge, "get_nudge_state"), Ok(serde_json::Value::Null));
+        for cmd in [
+            "app_store_read",
+            "app_store_write",
+            "guard_set_config",
+            "guard_stats",
+            "todoist_status",
+            "todoist_set_token",
+            "todoist_clear_token",
+            "park",
+            "spotify_state",
+            "guard_supported",
+            "guard_log_newtask",
+        ] {
+            assert!(denied(call(&nudge, cmd)), "nudge must not reach {cmd}");
+        }
+    }
 }

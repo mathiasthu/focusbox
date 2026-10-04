@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-app-store-write"
+description = "Enables the app_store_write command without any pre-configured scope."
+commands.allow = ["app_store_write"]
+
+[[permission]]
+identifier = "deny-app-store-write"
+description = "Denies the app_store_write command without any pre-configured scope."
+commands.deny = ["app_store_write"]

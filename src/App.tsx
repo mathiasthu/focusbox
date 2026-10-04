@@ -8,6 +8,8 @@ import FocusCard from "./components/FocusCard";
 import Settings from "./components/Settings";
 import SpotifyPlayer from "./components/SpotifyPlayer";
 import UpdateBanner from "./components/UpdateBanner";
+import NewTaskGuard from "./components/NewTaskGuard";
+import GuardStats from "./components/GuardStats";
 import { checkForUpdate, installUpdateAndRestart, type UpdateInfo } from "./lib/updater";
 import { isTauri, loadState, saveState, type NotesDoc } from "./lib/store";
 import { getFocusedTask, clearFocused, markFocusedDone, clearDone } from "./lib/focusedLine";
@@ -46,6 +48,21 @@ import {
   isAutostartAvailable,
 } from "./lib/autostart";
 import { isDemo } from "./lib/demo";
+import {
+  addOverride,
+  buildGuardConfig,
+  getGuardPrefs,
+  isGuardSupported,
+  loadAllowOverrides,
+  logNewTask,
+  parkTask,
+  pushGuardConfig,
+  saveAllowOverrides,
+  storeGuardPrefs,
+  timerStateFromStatus,
+  type AllowOverrides,
+  type GuardPrefs,
+} from "./lib/focusGuard";
 
 export default function App() {
   const demo = isDemo();
@@ -75,6 +92,15 @@ export default function App() {
   const editorRef = useRef<Editor | null>(null);
   const [lineDragging, setLineDragging] = useState(false);
   const focusTask = getFocusedTask(notesDoc);
+  // Focus guard (macOS desktop only). Device-local, never synced — see focusGuard.ts.
+  const [guardSupported, setGuardSupported] = useState(false);
+  const [guardPrefs, setGuardPrefs] = useState<GuardPrefs>(getGuardPrefs);
+  const [allowOverrides, setAllowOverrides] = useState<AllowOverrides>({});
+  const [timerStatus, setTimerStatus] = useState("set timer");
+  const [guardStatsOpen, setGuardStatsOpen] = useState(false);
+  // A different line was asked to become the focus while the current one is unfinished.
+  const [newTaskPrompt, setNewTaskPrompt] = useState<{ pos: number; text: string } | null>(null);
+  const guardOn = guardSupported && guardPrefs.enabled;
 
   useEffect(() => {
     if (isTauri) return;
@@ -194,6 +220,79 @@ export default function App() {
     };
   }, []);
 
+  // Focus guard: is it available here (macOS desktop), and this machine's per-task
+  // allow-list additions. Both no-op off-Tauri.
+  useEffect(() => {
+    let active = true;
+    isGuardSupported().then((ok) => {
+      if (active) setGuardSupported(ok);
+    });
+    loadAllowOverrides().then((o) => {
+      if (active) setAllowOverrides(o);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    storeGuardPrefs(guardPrefs);
+  }, [guardPrefs]);
+
+  // Keep the Rust watcher's picture current. Also runs on mount, which matters: the Rust
+  // side starts from "off" on every launch and only learns the real state from here.
+  const focusText = focusTask?.text ?? null;
+  const focusDone = focusTask?.done ?? false;
+  const guardTimer = timerStateFromStatus(timerStatus);
+  useEffect(() => {
+    if (!guardSupported || !loaded) return;
+    const task = focusText === null ? null : { text: focusText, done: focusDone };
+    void pushGuardConfig(buildGuardConfig(guardPrefs, task, guardTimer, allowOverrides));
+  }, [guardSupported, loaded, guardPrefs, focusText, focusDone, guardTimer, allowOverrides]);
+
+  // Events from the nudge window (via Rust). Handlers read the latest state through a ref,
+  // since the listeners are registered once.
+  const guardEventsRef = useRef({
+    onSwitch: () => {},
+    onAllow: (_: { taskKey: string; app?: string | null; domain?: string | null }) => {},
+  });
+  guardEventsRef.current = {
+    onSwitch: () => {
+      setSettingsOpen(false);
+      handleTimerReset();
+    },
+    onAllow: (e) => {
+      const next = addOverride(allowOverrides, e.taskKey, { app: e.app, domain: e.domain });
+      if (next === allowOverrides) return;
+      setAllowOverrides(next);
+      void saveAllowOverrides(next);
+    },
+  };
+  useEffect(() => {
+    if (!guardSupported) return;
+    let dead = false;
+    const unlisteners: (() => void)[] = [];
+    import("@tauri-apps/api/event")
+      .then(async ({ listen }) => {
+        const subs = await Promise.all([
+          listen("guard://switch", () => guardEventsRef.current.onSwitch()),
+          listen<{ taskKey: string; app?: string | null; domain?: string | null }>("guard://allow", (ev) =>
+            guardEventsRef.current.onAllow(ev.payload),
+          ),
+          // Rust has already shown + focused this window; just get Settings out of the way
+          // so the notes (where a task gets picked) are visible.
+          listen("guard://open-main", () => setSettingsOpen(false)),
+        ]);
+        if (dead) subs.forEach((u) => u());
+        else unlisteners.push(...subs);
+      })
+      .catch((err) => console.error("Focusbox: focus guard events unavailable", err));
+    return () => {
+      dead = true;
+      unlisteners.forEach((u) => u());
+    };
+  }, [guardSupported]);
+
   // Create/destroy the macOS tray item as the setting is toggled (no-op off-mac/web).
   useEffect(() => {
     if (!isTrayAvailable || !menubarTimer) {
@@ -256,6 +355,20 @@ export default function App() {
   // than an immediately-dead "done" card — both are a clear "focus on this"
   // signal.
   function focusLineAt(pos: number) {
+    const editor = editorRef.current;
+    if (!editor) return;
+    // Focus guard: switching away from an unfinished Focus task goes through a prompt.
+    if (guardOn && focusTask && !focusTask.done) {
+      const node = editor.state.doc.nodeAt(pos);
+      if (node && (node.type.name === "listItem" || node.type.name === "taskItem") && !node.attrs.focused) {
+        setNewTaskPrompt({ pos, text: node.textContent });
+        return;
+      }
+    }
+    applyFocusLineAt(pos);
+  }
+
+  function applyFocusLineAt(pos: number) {
     const editor = editorRef.current;
     if (!editor) return;
     editor.commands.setFocusedLineAt(pos);
@@ -345,6 +458,7 @@ export default function App() {
   // no-ops on unchanged text and off-mac/web.
   const handleTimerTick = useCallback((remainingMs: number, status: string) => {
     setTrayText(trayTitleFor(status, remainingMs));
+    setTimerStatus(status);
   }, []);
 
   // Countdown hit zero: ring, if the user turned the sound on.
@@ -458,9 +572,39 @@ export default function App() {
         onChimeSoundChange={changeChimeSound}
         autostart={autostart}
         onAutostartChange={changeAutostart}
+        guardAvailable={guardSupported && !demo}
+        guardPrefs={guardPrefs}
+        onGuardPrefsChange={setGuardPrefs}
+        onOpenGuardStats={() => setGuardStatsOpen(true)}
         sync={sync}
         demo={demo}
       />
+
+      {guardStatsOpen && <GuardStats onClose={() => setGuardStatsOpen(false)} />}
+
+      {newTaskPrompt && (
+        <NewTaskGuard
+          current={focusTask?.text ?? ""}
+          next={newTaskPrompt.text}
+          blockCompletely={guardPrefs.blockCompletely}
+          onPark={async () => {
+            // A copy goes to Todoist; the line stays in the notes and the focus stays put.
+            const result = await parkTask(newTaskPrompt.text);
+            if (result !== "rejected") void logNewTask("newtask_park", newTaskPrompt.text);
+            // Delivered or queued for a retry: done. Otherwise the prompt stays up to say
+            // why it hasn't reached Todoist (no key, or the key was rejected).
+            if (result === "sent" || result === "queued") setNewTaskPrompt(null);
+            return result;
+          }}
+          onSwitch={(reason) => {
+            void logNewTask("newtask_switch", focusTask?.text ?? "", reason);
+            const { pos } = newTaskPrompt;
+            setNewTaskPrompt(null);
+            applyFocusLineAt(pos);
+          }}
+          onCancel={() => setNewTaskPrompt(null)}
+        />
+      )}
 
       {update && !updateDismissed && (
         <UpdateBanner

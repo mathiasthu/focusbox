@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Focusbox uses Apple Events to control Spotify playback (play, pause, and skip) from the mini-player.</string>
+	<string>Focusbox uses Apple Events to control Spotify playback (play, pause, and skip) from the mini-player, and, when the focus guard is on, to read the address of the current browser tab so it can tell whether you are on a site that belongs to your task.</string>
 </dict>
 </plist>

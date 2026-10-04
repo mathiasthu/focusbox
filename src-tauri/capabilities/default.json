@@ -21,7 +21,19 @@
     "window-state:default",
     "core:window:allow-show",
     "core:window:allow-unminimize",
-    "core:window:allow-set-focus"
+    "core:window:allow-set-focus",
+    "allow-spotify-control",
+    "allow-spotify-state",
+    "allow-app-store-read",
+    "allow-app-store-write",
+    "allow-guard-supported",
+    "allow-guard-set-config",
+    "allow-guard-log-newtask",
+    "allow-guard-stats",
+    "allow-todoist-status",
+    "allow-todoist-set-token",
+    "allow-todoist-clear-token",
+    "allow-park"
   ],
   "windows": ["main"]
 }

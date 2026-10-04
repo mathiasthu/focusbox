@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "nudge",
+  "description": "Focus-guard nudge window: read its payload, answer it, and hear when it should refresh. Nothing else; in particular no store, sync or Todoist-key access.",
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-get-nudge-state",
+    "allow-nudge-resolve"
+  ],
+  "windows": ["nudge"]
+}

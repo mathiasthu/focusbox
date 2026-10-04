@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-nudge-state"
+description = "Enables the get_nudge_state command without any pre-configured scope."
+commands.allow = ["get_nudge_state"]
+
+[[permission]]
+identifier = "deny-get-nudge-state"
+description = "Denies the get_nudge_state command without any pre-configured scope."
+commands.deny = ["get_nudge_state"]

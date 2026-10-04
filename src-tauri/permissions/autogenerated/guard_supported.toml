@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-guard-supported"
+description = "Enables the guard_supported command without any pre-configured scope."
+commands.allow = ["guard_supported"]
+
+[[permission]]
+identifier = "deny-guard-supported"
+description = "Denies the guard_supported command without any pre-configured scope."
+commands.deny = ["guard_supported"]

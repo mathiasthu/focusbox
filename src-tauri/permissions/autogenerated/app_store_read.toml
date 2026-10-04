@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-app-store-read"
+description = "Enables the app_store_read command without any pre-configured scope."
+commands.allow = ["app_store_read"]
+
+[[permission]]
+identifier = "deny-app-store-read"
+description = "Denies the app_store_read command without any pre-configured scope."
+commands.deny = ["app_store_read"]

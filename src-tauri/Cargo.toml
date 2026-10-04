@@ -14,6 +14,10 @@ edition = "2021"
 name = "focusbox_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[dev-dependencies]
+# `tauri::test` (mock runtime) for the ACL test in lib.rs.
+tauri = { version = "2", features = ["tray-icon", "image-png", "test"] }
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -24,6 +28,26 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-http = "2"
 tauri-plugin-process = "2"
+# Focus guard: per-item idempotency keys for the Todoist queue, browser-tab URL → host,
+# and the whole-workday window in the user's chosen time zone.
+uuid = { version = "1", features = ["v4"] }
+url = "2"
+chrono = "0.4"
+chrono-tz = "0.10"
+
+# Focus guard (macOS only): frontmost-app sampling, re-activating the on-task app, and
+# raising the nudge window above the menu bar. Versions match what tauri already pulls in.
+# The Todoist token lives in the login Keychain.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray"] }
+objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication", "NSWindow", "NSResponder", "libc"] }
+keyring = { version = "3", features = ["apple-native"] }
+
+# Windows: no focus guard, but the Todoist key is stored in Credential Manager so the
+# parking path compiles and behaves the same.
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
 
 # Auto-updater + single-instance + window-state + autostart are desktop-only (no mobile target is built).
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]

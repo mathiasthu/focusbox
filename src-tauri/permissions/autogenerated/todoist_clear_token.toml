@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-todoist-clear-token"
+description = "Enables the todoist_clear_token command without any pre-configured scope."
+commands.allow = ["todoist_clear_token"]
+
+[[permission]]
+identifier = "deny-todoist-clear-token"
+description = "Denies the todoist_clear_token command without any pre-configured scope."
+commands.deny = ["todoist_clear_token"]

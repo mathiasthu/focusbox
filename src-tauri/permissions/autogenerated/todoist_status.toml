@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-todoist-status"
+description = "Enables the todoist_status command without any pre-configured scope."
+commands.allow = ["todoist_status"]
+
+[[permission]]
+identifier = "deny-todoist-status"
+description = "Denies the todoist_status command without any pre-configured scope."
+commands.deny = ["todoist_status"]

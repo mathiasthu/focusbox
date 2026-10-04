@@ -7,6 +7,8 @@ import { isTrayAvailable } from "../lib/tray";
 import { isAutostartAvailable } from "../lib/autostart";
 import { playChime, SOUNDS, type SoundId } from "../lib/chime";
 import AccountSync from "./AccountSync";
+import FocusGuardSettings from "./FocusGuardSettings";
+import type { GuardPrefs } from "../lib/focusGuard";
 import type { SyncController } from "../hooks/useSync";
 
 function isStripeUrl(url: string): boolean {
@@ -69,6 +71,11 @@ interface Props {
   onChimeSoundChange: (id: SoundId) => void;
   autostart: boolean;
   onAutostartChange: (enabled: boolean) => void;
+  /** macOS desktop only (the Rust side reports whether it can watch other apps). */
+  guardAvailable: boolean;
+  guardPrefs: GuardPrefs;
+  onGuardPrefsChange: (next: GuardPrefs) => void;
+  onOpenGuardStats: () => void;
   sync: SyncController;
   demo: boolean;
 }
@@ -92,6 +99,10 @@ export default function Settings({
   onChimeSoundChange,
   autostart,
   onAutostartChange,
+  guardAvailable,
+  guardPrefs,
+  onGuardPrefsChange,
+  onOpenGuardStats,
   sync,
   demo,
 }: Props) {
@@ -282,6 +293,11 @@ export default function Settings({
               Opens Focusbox when you sign in to this computer. Applies to this device only.
             </span>
           </div>
+        )}
+
+        {/* Device-local like "Start on login": stored in localStorage, never synced. */}
+        {guardAvailable && (
+          <FocusGuardSettings prefs={guardPrefs} onChange={onGuardPrefsChange} onOpenStats={onOpenGuardStats} />
         )}
 
         {isSpotifyAvailable && (

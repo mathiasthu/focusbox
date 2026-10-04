@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-nudge-resolve"
+description = "Enables the nudge_resolve command without any pre-configured scope."
+commands.allow = ["nudge_resolve"]
+
+[[permission]]
+identifier = "deny-nudge-resolve"
+description = "Denies the nudge_resolve command without any pre-configured scope."
+commands.deny = ["nudge_resolve"]

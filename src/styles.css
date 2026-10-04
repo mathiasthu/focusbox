@@ -1702,3 +1702,229 @@ body::after {
   cursor: pointer; opacity: 0.7;
 }
 .focus-card__btn:hover { opacity: 1; background: var(--accent-soft); }
+
+/* ---------- Focus guard: settings section ---------- */
+.guard-settings .setting__row + .setting__hint,
+.guard-settings > .setting__hint {
+  margin-top: -4px;
+}
+.guard-settings__label {
+  font-size: 13.5px;
+  color: var(--ink-soft);
+}
+.guard-settings__workday {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: 100%;
+}
+.guard-settings__workday label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ink-faint);
+  flex: 1 1 90px;
+}
+.guard-settings__workday .guard-settings__tz {
+  flex: 2 1 160px;
+}
+.guard-settings__todoist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+.guard-settings__keyrow {
+  flex-wrap: nowrap;
+}
+.guard-settings__keyrow .account__input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ---------- Focus guard: stats panel ---------- */
+.guard-stats {
+  width: min(480px, calc(100vw - 48px));
+}
+.guard-stats__day {
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.guard-stats__title {
+  margin: 0 0 6px;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 17px;
+}
+.guard-stats__numbers {
+  display: flex;
+  gap: 18px;
+  font-size: 13.5px;
+  color: var(--ink-soft);
+}
+.guard-stats__numbers strong {
+  color: var(--ink);
+}
+.guard-stats__block {
+  margin-top: 8px;
+  font-size: 13px;
+}
+.guard-stats__block ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--ink);
+}
+.guard-stats__label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.guard-stats__count {
+  color: var(--ink-faint);
+}
+
+/* ---------- Focus guard: "you're already on something" prompt ---------- */
+.newtask .modal__title {
+  font-size: 19px;
+  overflow-wrap: anywhere;
+}
+.newtask__next {
+  margin: 0 0 14px;
+  font-size: 14px;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+.newtask__switch {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+/* ---------- Focus guard: full-screen nudge window ---------- */
+/* The nudge window is opaque and covers the whole monitor, so it paints its own solid
+   paper rather than the app's gradient (and drops the film grain). */
+.nudge-root body {
+  background-image: none;
+}
+.nudge-root body::after {
+  display: none;
+}
+.nudge {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: var(--bg);
+}
+.nudge__panel {
+  width: min(640px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  animation: pop-in 0.2s ease both;
+}
+.nudge__eyebrow {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+.nudge__eyebrow strong {
+  color: var(--accent);
+}
+.nudge__task {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: clamp(32px, 5vw, 56px);
+  line-height: 1.1;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.nudge__sub {
+  margin: 0;
+  font-size: 16px;
+  color: var(--ink-soft);
+}
+.nudge__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+.nudge__input {
+  font-family: var(--font-ui);
+  font-size: 16px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  padding: 10px 12px;
+  resize: vertical;
+}
+.nudge__input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.nudge__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.nudge__btn {
+  font-family: var(--font-ui);
+  font-size: 15px;
+  font-weight: 600;
+  padding: 11px 20px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.nudge__btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.nudge__btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.nudge__btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.nudge__btn--primary:hover:not(:disabled) {
+  background: var(--accent-deep);
+  border-color: var(--accent-deep);
+}
+.nudge__link {
+  align-self: flex-start;
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--ink-faint);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.nudge__link:hover:not(:disabled) {
+  color: var(--accent);
+}
+.nudge__error {
+  margin: 0;
+  font-size: 13px;
+  color: #c0492b;
+}

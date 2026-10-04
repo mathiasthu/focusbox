@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-park"
+description = "Enables the park command without any pre-configured scope."
+commands.allow = ["park"]
+
+[[permission]]
+identifier = "deny-park"
+description = "Denies the park command without any pre-configured scope."
+commands.deny = ["park"]
