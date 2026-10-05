@@ -16,13 +16,16 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dev-dependencies]
 # `tauri::test` (mock runtime) for the ACL test in lib.rs.
-tauri = { version = "2", features = ["tray-icon", "image-png", "test"] }
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api", "test"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# macos-private-api: a transparent window on macOS (the focus-guard nudge shows the
+# desktop through a blurred, tinted sheet). Must match `app.macOSPrivateApi` in
+# tauri.conf.json, which tauri-build checks.
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

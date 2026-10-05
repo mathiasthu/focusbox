@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { isValidReason, MIN_REASON_CHARS, parkResultMessage } from "../lib/focusGuard";
+import { applyTheme, getStoredMode } from "../lib/theme";
 
 interface NudgePayload {
   kind: "drift" | "needTask";
@@ -31,6 +32,23 @@ export default function Nudge() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const reasonRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Same theme as the main window: main.tsx already applied the stored mode before the
+  // first paint. Keep following it while the nudge is up: macOS switching light/dark
+  // (for "system"), or the setting changing in the main window (same-origin storage).
+  useEffect(() => {
+    const sync = () => applyTheme(getStoredMode());
+    const mql = window.matchMedia?.("(prefers-color-scheme: dark)");
+    mql?.addEventListener("change", sync);
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === null || e.key === "focusbox-theme") sync();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => {
+      mql?.removeEventListener("change", sync);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
 
   const load = useCallback(async () => {
     try {

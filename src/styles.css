@@ -1809,9 +1809,21 @@ body::after {
 }
 
 /* ---------- Focus guard: full-screen nudge window ---------- */
-/* The nudge window is opaque and covers the whole monitor, so it paints its own solid
-   paper rather than the app's gradient (and drops the film grain). */
+/* The nudge window is transparent on macOS (focusguard.rs) with a native blur behind
+   the page, so the page itself must not paint anything opaque: no body colour, no
+   gradient, no film grain. The theme comes from .nudge's tint instead.
+   Contrast (WCAG AA), worst cases with no blur at all:
+   - light, black page behind: tint ≈ #aca89f; the panel (90% paper over it) ≈ #f3efe7,
+     so --ink-soft is ~5:1 and --ink far above;
+   - dark, white page behind: tint ≈ #3c3936 (dim, never bright at night); panel darker
+     still, --ink-soft ~4.7:1 or better. */
+.nudge-root,
+.nudge-root body,
+.nudge-root #root {
+  background: transparent;
+}
 .nudge-root body {
+  background-color: transparent;
   background-image: none;
 }
 .nudge-root body::after {
@@ -1822,14 +1834,30 @@ body::after {
   display: grid;
   place-items: center;
   padding: 32px;
-  background: var(--bg);
+  /* fallback for engines without color-mix */
+  background: rgba(239, 233, 221, 0.72);
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+}
+:root[data-theme="dark"] .nudge {
+  background: rgba(26, 23, 20, 0.86);
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
 }
 .nudge__panel {
-  width: min(640px, 100%);
+  width: min(680px, 100%);
   display: flex;
   flex-direction: column;
   gap: 18px;
+  padding: 32px 36px;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: rgba(251, 247, 239, 0.9);
+  background: color-mix(in srgb, var(--paper) 90%, transparent);
+  box-shadow: var(--shadow);
   animation: pop-in 0.2s ease both;
+}
+:root[data-theme="dark"] .nudge__panel {
+  background: rgba(34, 30, 26, 0.9);
+  background: color-mix(in srgb, var(--paper) 90%, transparent);
 }
 .nudge__eyebrow {
   margin: 0;

@@ -990,6 +990,20 @@ fn open_nudge_window<R: Runtime>(app: &AppHandle<R>) {
         .skip_taskbar(true)
         .shadow(false)
         .focused(true);
+        // Translucent on macOS: the desktop shows through, blurred by an NSVisualEffectView
+        // (FullScreenUI follows the system light/dark appearance), and the page paints a
+        // theme tint over it (styles.css, .nudge). A solid sheet was a flashbang at night.
+        // Needs the macos-private-api feature + app.macOSPrivateApi. Windows has no nudge.
+        #[cfg(target_os = "macos")]
+        {
+            use tauri::window::{Effect, EffectState, EffectsBuilder};
+            builder = builder.transparent(true).effects(
+                EffectsBuilder::new()
+                    .effect(Effect::FullScreenUI)
+                    .state(EffectState::Active)
+                    .build(),
+            );
+        }
         match &monitor {
             Some(m) => {
                 let scale = m.scale_factor();
