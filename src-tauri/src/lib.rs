@@ -126,6 +126,18 @@ pub fn run() {
     ));
 
     builder
+        // The nudge and toast windows are created once and reused, never destroyed:
+        // tearing a WKWebView down mid display-link refresh crashed WebKit (see
+        // focusguard::WinOp). So a close request on them (Cmd+W) only hides the window.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let label = window.label();
+                if label == focusguard::NUDGE_LABEL || label == toast::TOAST_LABEL {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(|app| {
             focusguard::init(app.handle());
             todoist::init(app.handle());

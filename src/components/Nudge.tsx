@@ -98,20 +98,37 @@ export default function Nudge() {
     }
   }, []);
 
+  // This window is created once and reused (never destroyed: see focusguard.rs WinOp).
+  // Rust sends "nudge://refresh" before every show: re-fetch and start from a clean UI
+  // (load() resets the reason, park view, busy flag and error). "nudge://reset" comes
+  // with every hide, so the next show never flashes the previous answer.
   useEffect(() => {
     void load();
-    let unlisten: (() => void) | undefined;
+    const unlisteners: (() => void)[] = [];
     let dead = false;
     import("@tauri-apps/api/event")
-      .then(({ listen }) => listen("guard://nudge-refresh", () => void load()))
-      .then((u) => {
-        if (dead) u();
-        else unlisten = u;
+      .then(({ listen }) =>
+        Promise.all([
+          listen("nudge://refresh", () => void load()),
+          listen("nudge://reset", () => {
+            setState(null);
+            setMode("main");
+            setReason("");
+            setParkText("");
+            setBusy(false);
+            setError(null);
+            setLoaded(false);
+          }),
+        ]),
+      )
+      .then((us) => {
+        if (dead) us.forEach((u) => u());
+        else unlisteners.push(...us);
       })
       .catch(() => {});
     return () => {
       dead = true;
-      unlisten?.();
+      unlisteners.forEach((u) => u());
     };
   }, [load]);
 

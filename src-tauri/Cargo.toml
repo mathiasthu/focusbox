@@ -46,7 +46,7 @@ objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSDictionary", "NSValue", "NSURL"] }
 # proc_pidpath, to tie a browser helper process holding a video assertion to its app.
 libc = "0.2"
-objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication", "NSWindow", "NSResponder", "libc"] }
+objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication", "NSWindow", "NSResponder", "NSView", "libc"] }
 keyring = { version = "3", features = ["apple-native"] }
 
 # Windows: no focus guard, but the Todoist key is stored in Credential Manager so the

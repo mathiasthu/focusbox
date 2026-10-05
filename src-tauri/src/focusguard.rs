@@ -1069,6 +1069,40 @@ mod platform {
         })
     }
 
+    /// Tag window-vibrancy 0.6 gives the NSVisualEffectView it adds under the window's
+    /// content view (window-vibrancy src/macos/internal.rs NS_VIEW_TAG_BLUR_VIEW), which is
+    /// how Tauri's `effects` applies FullScreenUI.
+    const BLUR_VIEW_TAG: isize = 91376254;
+
+    /// Show or hide the window's blur view without removing it. Main thread only.
+    ///
+    /// # Safety
+    /// `ns_window` must be the live NSWindow pointer Tauri returned for this window.
+    pub unsafe fn set_blur(ns_window: *mut std::ffi::c_void, on: bool) {
+        if ns_window.is_null() {
+            return;
+        }
+        let w: &NSWindow = &*(ns_window as *const NSWindow);
+        if let Some(blur) = w.contentView().and_then(|v| v.viewWithTag(BLUR_VIEW_TAG)) {
+            blur.setHidden(!on);
+        }
+    }
+
+    /// Bring a window to the front without making it key or activating Focusbox (the
+    /// toast). Tauri's `show()` is `makeKeyAndOrderFront:`, which would take keyboard
+    /// focus from Focusbox's own main window. Main thread only.
+    ///
+    /// # Safety
+    /// `ns_window` must be the live NSWindow pointer Tauri returned for this window.
+    pub unsafe fn order_front_quietly(ns_window: *mut std::ffi::c_void) -> bool {
+        if ns_window.is_null() {
+            return false;
+        }
+        let w: &NSWindow = &*(ns_window as *const NSWindow);
+        w.orderFrontRegardless();
+        true
+    }
+
     /// Make Focusbox the active app so the nudge is actually in front.
     #[allow(deprecated)]
     pub fn activate_self() {
@@ -1114,6 +1148,14 @@ mod platform {
         false
     }
     pub fn activate_self() {}
+    /// # Safety
+    /// No-op off macOS.
+    pub unsafe fn set_blur(_ns_window: *mut std::ffi::c_void, _on: bool) {}
+    /// # Safety
+    /// Off macOS there's no quiet show; the caller falls back to `show()`.
+    pub unsafe fn order_front_quietly(_ns_window: *mut std::ffi::c_void) -> bool {
+        false
+    }
     pub fn front_window_rect(_pid: i32) -> Option<super::Rect> {
         None
     }
@@ -1160,9 +1202,6 @@ struct Inner {
     /// counts as a drift, never touches escalation and never reaches the log. A real
     /// nudge always wins over it.
     preview: Option<Preview>,
-    /// Whether the nudge window currently on screen was built with the blur effect, so a
-    /// mismatch can be rebuilt (macOS can't remove a vibrancy view from a live window).
-    window_blur: Option<bool>,
     /// The app the user was in when the current nudge (or preview) was raised; the nudge
     /// goes on the monitor holding that app's front window.
     target_pid: Option<i32>,
@@ -1390,9 +1429,10 @@ fn watch<R: Runtime>(app: AppHandle<R>, state: Arc<GuardState>) {
         };
         // Sample outside the lock: the browser read can take up to 1.5s.
         let nudge_up = state.inner.lock().map(|i| i.machine.nudge().is_some()).unwrap_or(false);
-        // A nudge is only answered through its buttons. If its window went away some other
-        // way (Cmd+W, a crash in the webview), put it back rather than staying frozen.
-        if nudge_up && app.get_webview_window(NUDGE_LABEL).is_none() {
+        // A nudge is only answered through its buttons. If its window went off screen some
+        // other way (Cmd+W is turned into a hide, see lib.rs), put it back rather than
+        // staying frozen. A hidden window with no nudge up is just parked for reuse.
+        if nudge_up && !nudge_visible(&app) {
             open_nudge_window(&app);
         }
         let sample = if mode == Mode::Idle || nudge_up {
@@ -1451,6 +1491,183 @@ fn watch<R: Runtime>(app: AppHandle<R>, state: Arc<GuardState>) {
     }
 }
 
+/// One step in presenting or dismissing a long-lived window (the nudge, the toast).
+///
+/// These windows are created once and then only shown and hidden, never destroyed:
+/// tearing a WKWebView down while a display-link refresh is still pending crashed WebKit
+/// on the main thread (EXC_BAD_ACCESS in ScrollingTree::takePendingScrollUpdates, twice on
+/// 2026-10-05). Moving or resizing happens only while the window is hidden.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WinOp {
+    /// Build it, hidden, already placed on the target monitor.
+    Create,
+    Hide,
+    /// Move/resize onto the target monitor.
+    Place,
+    /// Show or hide the native blur view (it is always there, see `platform::set_blur`).
+    Blur(bool),
+    /// Tell the page to re-fetch its payload and reset its local state.
+    Refresh,
+    /// Tell the page to clear itself (so a later show never flashes stale content).
+    Reset,
+    Show,
+    /// Status-bar level, all Spaces, over full-screen apps.
+    Raise,
+    Focus,
+}
+
+/// Steps to put the nudge up. `moved` = it is not already covering the target monitor.
+pub fn plan_nudge_present(exists: bool, visible: bool, moved: bool, blur: bool) -> Vec<WinOp> {
+    use WinOp::*;
+    let mut ops = Vec::new();
+    if !exists {
+        ops.push(Create);
+    } else {
+        // Never move or swap the content of a window that's on screen (e.g. a preview
+        // turning into a real nudge): take it down first, then show it again.
+        if visible {
+            ops.push(Hide);
+        }
+        if moved {
+            ops.push(Place);
+        }
+    }
+    ops.push(Blur(blur));
+    if exists {
+        ops.push(Refresh);
+    }
+    ops.extend([Show, Raise, Focus]);
+    ops
+}
+
+/// Steps to take the nudge down: hide it and clear the page. Nothing if it never existed.
+pub fn plan_nudge_dismiss(exists: bool) -> Vec<WinOp> {
+    if exists {
+        vec![WinOp::Hide, WinOp::Reset]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Covering `m` already? Compares physical position and size.
+fn covers<R: Runtime>(w: &tauri::WebviewWindow<R>, m: &tauri::Monitor) -> bool {
+    let pos_ok = w.outer_position().map(|p| p == *m.position()).unwrap_or(false);
+    let size_ok = w.inner_size().map(|s| s == *m.size()).unwrap_or(false);
+    pos_ok && size_ok
+}
+
+fn place<R: Runtime>(w: &tauri::WebviewWindow<R>, m: &tauri::Monitor) {
+    let scale = m.scale_factor();
+    let _ = w.set_position(m.position().to_logical::<f64>(scale));
+    let _ = w.set_size(m.size().to_logical::<f64>(scale));
+}
+
+fn build_nudge<R: Runtime>(app: &AppHandle<R>, monitor: Option<&tauri::Monitor>) -> Option<tauri::WebviewWindow<R>> {
+    let mut builder = tauri::WebviewWindowBuilder::new(
+        app,
+        NUDGE_LABEL,
+        tauri::WebviewUrl::App("index.html?view=nudge".into()),
+    )
+    .title("Focusbox")
+    .decorations(false)
+    .resizable(false)
+    .always_on_top(true)
+    .visible_on_all_workspaces(true)
+    .skip_taskbar(true)
+    .shadow(false)
+    // Built hidden; WinOp::Show puts it up.
+    .visible(false)
+    .focused(false);
+    // Translucent on macOS: the desktop shows through and the page paints a theme tint over
+    // it (styles.css, .nudge). The FullScreenUI blur view is always created; whether it's
+    // visible is the "Blur behind nudge" setting, applied on every show (WinOp::Blur), so
+    // changing it never needs a new window. Needs macos-private-api + app.macOSPrivateApi.
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::window::{Effect, EffectState, EffectsBuilder};
+        builder = builder.transparent(true).effects(
+            EffectsBuilder::new()
+                .effect(Effect::FullScreenUI)
+                .state(EffectState::Active)
+                .build(),
+        );
+    }
+    match monitor {
+        Some(m) => {
+            let scale = m.scale_factor();
+            let pos = m.position().to_logical::<f64>(scale);
+            let size = m.size().to_logical::<f64>(scale);
+            builder = builder.position(pos.x, pos.y).inner_size(size.width, size.height);
+        }
+        None => builder = builder.maximized(true),
+    }
+    match builder.build() {
+        Ok(w) => Some(w),
+        Err(e) => {
+            eprintln!("Focusbox: could not create the focus nudge: {e}");
+            None
+        }
+    }
+}
+
+/// Run a plan against the nudge window. Main thread only.
+fn run_nudge_ops<R: Runtime>(app: &AppHandle<R>, ops: &[WinOp], monitor: Option<&tauri::Monitor>) {
+    let mut w = app.get_webview_window(NUDGE_LABEL);
+    for op in ops {
+        match op {
+            WinOp::Create => w = build_nudge(app, monitor),
+            WinOp::Hide => {
+                if let Some(w) = &w {
+                    let _ = w.hide();
+                }
+            }
+            WinOp::Place => {
+                if let (Some(w), Some(m)) = (&w, monitor) {
+                    place(w, m);
+                }
+            }
+            WinOp::Blur(on) => {
+                if let Some(ns) = w.as_ref().and_then(|w| w.ns_window_ptr().ok()) {
+                    unsafe { platform::set_blur(ns, *on) };
+                }
+            }
+            WinOp::Refresh => {
+                if let Some(w) = &w {
+                    let _ = w.emit_to(NUDGE_LABEL, "nudge://refresh", ());
+                }
+            }
+            WinOp::Reset => {
+                if let Some(w) = &w {
+                    let _ = w.emit_to(NUDGE_LABEL, "nudge://reset", ());
+                }
+            }
+            WinOp::Show => {
+                if let Some(w) = &w {
+                    let _ = w.show();
+                }
+            }
+            WinOp::Raise => {
+                if let Some(ns) = w.as_ref().and_then(|w| w.ns_window_ptr().ok()) {
+                    unsafe { platform::raise_window(ns) };
+                }
+            }
+            WinOp::Focus => {
+                if let Some(w) = &w {
+                    platform::activate_self();
+                    let _ = w.set_focus();
+                }
+            }
+        }
+    }
+}
+
+/// Whether the nudge window is on screen (it is never destroyed, so "exists" isn't it).
+fn nudge_visible<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.get_webview_window(NUDGE_LABEL)
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false)
+}
+
 fn open_nudge_window<R: Runtime>(app: &AppHandle<R>) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
@@ -1458,103 +1675,19 @@ fn open_nudge_window<R: Runtime>(app: &AppHandle<R>) {
         // Re-check on the main thread: the nudge may have been answered between the
         // caller's decision and now, and an orphan full-screen window has no way out.
         let state = app.state::<Arc<GuardState>>().inner().clone();
-        let Some((blur, built_with)) =
-            state.inner.lock().ok().and_then(|i| i.wanted().map(|b| (b, i.window_blur)))
+        let Some((blur, pid)) = state.inner.lock().ok().and_then(|i| i.wanted().map(|b| (b, i.target_pid)))
         else {
             return;
         };
-        if let Some(w) = app.get_webview_window(NUDGE_LABEL) {
-            if cfg!(target_os = "macos") && built_with != Some(blur) {
-                // The blur setting differs from the window on screen, and a vibrancy view
-                // can't be removed from a live NSWindow: rebuild once the old one is gone.
-                if let Ok(mut i) = state.inner.lock() {
-                    i.window_blur = None;
-                }
-                let _ = w.destroy();
-                let later = app.clone();
-                std::thread::spawn(move || {
-                    for _ in 0..30 {
-                        std::thread::sleep(Duration::from_millis(100));
-                        if later.get_webview_window(NUDGE_LABEL).is_none() {
-                            open_nudge_window(&later);
-                            return;
-                        }
-                    }
-                });
-                return;
-            }
-            let _ = w.emit_to(NUDGE_LABEL, "guard://nudge-refresh", ());
-            // A reused window (e.g. a preview turning into a real nudge) moves to the
-            // right monitor too.
-            let pid = state.inner.lock().ok().and_then(|i| i.target_pid);
-            if let Some(m) = target_monitor(&app, pid) {
-                let scale = m.scale_factor();
-                let _ = w.set_position(m.position().to_logical::<f64>(scale));
-                let _ = w.set_size(m.size().to_logical::<f64>(scale));
-            }
-            let _ = w.show();
-            if let Ok(ns) = w.ns_window_ptr() {
-                unsafe { platform::raise_window(ns) };
-            }
-            platform::activate_self();
-            let _ = w.set_focus();
-            return;
-        }
-        let pid = state.inner.lock().ok().and_then(|i| i.target_pid);
         let monitor = target_monitor(&app, pid);
-        let mut builder = tauri::WebviewWindowBuilder::new(
-            &app,
-            NUDGE_LABEL,
-            tauri::WebviewUrl::App("index.html?view=nudge".into()),
-        )
-        .title("Focusbox")
-        .decorations(false)
-        .resizable(false)
-        .always_on_top(true)
-        .visible_on_all_workspaces(true)
-        .skip_taskbar(true)
-        .shadow(false)
-        .focused(true);
-        // Translucent on macOS: the desktop shows through, blurred by an NSVisualEffectView
-        // (FullScreenUI follows the system light/dark appearance), and the page paints a
-        // theme tint over it (styles.css, .nudge). A solid sheet was a flashbang at night.
-        // Needs the macos-private-api feature + app.macOSPrivateApi. Windows has no nudge.
-        // The blur is the user's "Blur behind nudge" setting.
-        #[cfg(target_os = "macos")]
-        {
-            use tauri::window::{Effect, EffectState, EffectsBuilder};
-            builder = builder.transparent(true);
-            if blur {
-                builder = builder.effects(
-                    EffectsBuilder::new()
-                        .effect(Effect::FullScreenUI)
-                        .state(EffectState::Active)
-                        .build(),
-                );
-            }
-        }
-        match &monitor {
-            Some(m) => {
-                let scale = m.scale_factor();
-                let pos = m.position().to_logical::<f64>(scale);
-                let size = m.size().to_logical::<f64>(scale);
-                builder = builder.position(pos.x, pos.y).inner_size(size.width, size.height);
-            }
-            None => builder = builder.maximized(true),
-        }
-        match builder.build() {
-            Ok(w) => {
-                if let Ok(mut i) = state.inner.lock() {
-                    i.window_blur = Some(blur);
-                }
-                if let Ok(ns) = w.ns_window_ptr() {
-                    unsafe { platform::raise_window(ns) };
-                }
-                platform::activate_self();
-                let _ = w.set_focus();
-            }
-            Err(e) => eprintln!("Focusbox: could not open the focus nudge: {e}"),
-        }
+        let existing = app.get_webview_window(NUDGE_LABEL);
+        let visible = existing.as_ref().and_then(|w| w.is_visible().ok()).unwrap_or(false);
+        let moved = match (&existing, &monitor) {
+            (Some(w), Some(m)) => !covers(w, m),
+            _ => false,
+        };
+        let ops = plan_nudge_present(existing.is_some(), visible, moved, blur);
+        run_nudge_ops(&app, &ops, monitor.as_ref());
     });
 }
 
@@ -1579,10 +1712,13 @@ fn target_monitor<R: Runtime>(app: &AppHandle<R>, pid: Option<i32>) -> Option<ta
         .or_else(|| app.primary_monitor().ok().flatten())
 }
 
+/// Take the nudge down: hide it (never destroy, see `WinOp`) and clear the page.
 fn close_nudge_window<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(w) = app.get_webview_window(NUDGE_LABEL) {
-        let _ = w.destroy();
-    }
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let exists = handle.get_webview_window(NUDGE_LABEL).is_some();
+        run_nudge_ops(&handle, &plan_nudge_dismiss(exists), None);
+    });
 }
 
 /// Put a window at the nudge's level (above the menu bar, on every Space, over full-screen
@@ -1590,6 +1726,15 @@ fn close_nudge_window<R: Runtime>(app: &AppHandle<R>) {
 pub(crate) fn raise_webview_window<R: Runtime>(w: &tauri::WebviewWindow<R>) {
     if let Ok(ns) = w.ns_window_ptr() {
         unsafe { platform::raise_window(ns) };
+    }
+}
+
+/// Order a window front without focusing it or activating Focusbox (macOS); plain
+/// `show()` elsewhere. Main thread only.
+pub(crate) fn show_quietly<R: Runtime>(w: &tauri::WebviewWindow<R>) {
+    let done = w.ns_window_ptr().map(|ns| unsafe { platform::order_front_quietly(ns) }).unwrap_or(false);
+    if !done {
+        let _ = w.show();
     }
 }
 
@@ -2566,6 +2711,61 @@ mod tests {
         let applied = inner.apply_config(p, 1000);
         assert!(applied.closed_nudge);
         assert!(inner.machine.nudge().is_none());
+    }
+
+    // --- window lifecycle: show/hide, never destroy ---
+
+    #[test]
+    fn the_first_nudge_creates_the_window_hidden_then_shows_it() {
+        use WinOp::*;
+        assert_eq!(plan_nudge_present(false, false, false, true), vec![Create, Blur(true), Show, Raise, Focus]);
+        assert_eq!(plan_nudge_present(false, false, false, false), vec![Create, Blur(false), Show, Raise, Focus]);
+    }
+
+    #[test]
+    fn later_nudges_reuse_the_hidden_window() {
+        use WinOp::*;
+        // Same monitor as last time: no move, just refresh the page and show.
+        assert_eq!(plan_nudge_present(true, false, false, false), vec![Blur(false), Refresh, Show, Raise, Focus]);
+        // Another monitor: placed while still hidden.
+        assert_eq!(plan_nudge_present(true, false, true, true), vec![Place, Blur(true), Refresh, Show, Raise, Focus]);
+    }
+
+    #[test]
+    fn a_visible_window_is_hidden_before_it_moves() {
+        use WinOp::*;
+        // e.g. a preview on one screen becoming a real nudge for the other screen.
+        let ops = plan_nudge_present(true, true, true, false);
+        assert_eq!(ops, vec![Hide, Place, Blur(false), Refresh, Show, Raise, Focus]);
+        // Preview -> real nudge on the same screen: no move, but still hidden while the
+        // content changes.
+        assert_eq!(plan_nudge_present(true, true, false, true), vec![Hide, Blur(true), Refresh, Show, Raise, Focus]);
+    }
+
+    #[test]
+    fn the_blur_setting_is_applied_on_every_show_and_nothing_is_ever_destroyed() {
+        for exists in [false, true] {
+            for visible in [false, true] {
+                for moved in [false, true] {
+                    for blur in [false, true] {
+                        let ops = plan_nudge_present(exists, visible, moved, blur);
+                        assert!(ops.contains(&WinOp::Blur(blur)));
+                        assert_eq!(ops.iter().filter(|o| **o == WinOp::Create).count(), usize::from(!exists));
+                        if let (Some(p), Some(h)) = (
+                            ops.iter().position(|o| *o == WinOp::Place),
+                            ops.iter().position(|o| *o == WinOp::Show),
+                        ) {
+                            assert!(p < h, "never moved after showing");
+                        }
+                        if exists && visible {
+                            assert_eq!(ops[0], WinOp::Hide, "hidden before it moves or changes");
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(plan_nudge_dismiss(true), vec![WinOp::Hide, WinOp::Reset]);
+        assert!(plan_nudge_dismiss(false).is_empty());
     }
 
     #[test]
