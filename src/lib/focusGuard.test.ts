@@ -1,6 +1,12 @@
 import "./testDomShim";
 import { describe, expect, it, beforeEach } from "vitest";
 import {
+  applyNudgeOpacity,
+  getNudgeOpacity,
+  nudgeAlphas,
+  normalizeNudgeOpacity,
+  storeNudgeOpacity,
+  NUDGE_OPACITY_KEY,
   parkResultMessage,
   addOverride,
   aggregateStats,
@@ -126,6 +132,7 @@ describe("buildGuardConfig", () => {
     expect(c.allowDomains).toContain("github.com");
     expect(c.workday.days).toEqual([1, 2, 3, 4, 5, 6]);
     expect(c.graceSecs).toBe(30);
+    expect(c.blur).toBe(true);
   });
   it("treats a done or missing card as no task", () => {
     expect(buildGuardConfig(prefs, { text: "x", done: true }, "running", {}).hasTask).toBe(false);
@@ -150,6 +157,50 @@ describe("prefs", () => {
     );
     localStorage.setItem("focusbox-focus-guard", "{not json");
     expect(getGuardPrefs()).toEqual(DEFAULT_GUARD_PREFS);
+  });
+});
+
+describe("nudge opacity", () => {
+  beforeEach(() => localStorage.clear());
+  it("defaults to 45% and reads back what was stored", () => {
+    expect(getNudgeOpacity()).toBe(45);
+    storeNudgeOpacity(70);
+    expect(localStorage.getItem(NUDGE_OPACITY_KEY)).toBe("70");
+    expect(getNudgeOpacity()).toBe(70);
+  });
+  it("clamps to 10–95, snaps to steps of 5 and rejects garbage", () => {
+    expect(normalizeNudgeOpacity(0)).toBe(10);
+    expect(normalizeNudgeOpacity(100)).toBe(95);
+    expect(normalizeNudgeOpacity("62")).toBe(60);
+    expect(normalizeNudgeOpacity(63)).toBe(65);
+    expect(normalizeNudgeOpacity("abc")).toBe(45);
+    expect(normalizeNudgeOpacity(null)).toBe(45);
+    expect(normalizeNudgeOpacity("")).toBe(45);
+    expect(normalizeNudgeOpacity(Number.NaN)).toBe(45);
+    localStorage.setItem(NUDGE_OPACITY_KEY, "9999");
+    expect(getNudgeOpacity()).toBe(95);
+  });
+  it("tint follows the setting, dark is heavier, and the card never drops below 92%", () => {
+    expect(nudgeAlphas(45)).toEqual({ tint: 0.45, tintDark: 0.6, card: 0.92 });
+    expect(nudgeAlphas(10)).toEqual({ tint: 0.1, tintDark: 0.25, card: 0.92 });
+    expect(nudgeAlphas(70)).toEqual({ tint: 0.7, tintDark: 0.85, card: 0.95 });
+    expect(nudgeAlphas(95)).toEqual({ tint: 0.95, tintDark: 1, card: 1 });
+    for (let p = 10; p <= 95; p += 5) {
+      const a = nudgeAlphas(p);
+      expect(a.card).toBeGreaterThanOrEqual(0.92);
+      expect(a.card).toBeGreaterThanOrEqual(a.tint);
+      expect(a.tintDark).toBeGreaterThanOrEqual(a.tint);
+    }
+  });
+  it("writes the CSS custom properties as percentages", () => {
+    const props = new Map<string, string>();
+    const el = { style: { setProperty: (k: string, v: string) => props.set(k, v) } } as unknown as HTMLElement;
+    applyNudgeOpacity(el, 50);
+    expect(Object.fromEntries(props)).toEqual({
+      "--nudge-tint": "50%",
+      "--nudge-tint-dark": "65%",
+      "--nudge-card": "92%",
+    });
   });
 });
 

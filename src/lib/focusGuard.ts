@@ -221,6 +221,8 @@ export interface GuardPrefs {
   /** New-task prompt offers only "Park it". */
   blockCompletely: boolean;
   workday: { enabled: boolean; start: string; end: string; tz: string };
+  /** Native blur behind the translucent nudge (macOS). */
+  blur: boolean;
 }
 
 export const DEFAULT_GUARD_PREFS: GuardPrefs = {
@@ -228,6 +230,7 @@ export const DEFAULT_GUARD_PREFS: GuardPrefs = {
   graceSecs: 30,
   blockCompletely: false,
   workday: { enabled: false, start: "10:00", end: "19:00", tz: "Asia/Bangkok" },
+  blur: true,
 };
 
 /** Mon–Sat. Fixed for now; the Rust side takes a list so this can become a setting. */
@@ -251,6 +254,7 @@ export function normalizePrefs(raw: unknown): GuardPrefs {
       end: typeof w.end === "string" && HHMM.test(w.end) ? w.end : d.workday.end,
       tz: typeof w.tz === "string" && w.tz.trim() ? w.tz.trim() : d.workday.tz,
     },
+    blur: r.blur !== false,
   };
 }
 
@@ -271,6 +275,63 @@ export function storeGuardPrefs(p: GuardPrefs): void {
   } catch {
     /* storage full / disabled: the setting just won't survive a restart */
   }
+}
+
+// ---------------------------------------------------------------------------------------
+// Nudge opacity (device-local, its own key so the nudge window can react to just it)
+// ---------------------------------------------------------------------------------------
+
+export const NUDGE_OPACITY_KEY = "focusbox-guard-nudge-opacity";
+export const NUDGE_OPACITY_DEFAULT = 45;
+export const NUDGE_OPACITY_MIN = 10;
+export const NUDGE_OPACITY_MAX = 95;
+export const NUDGE_OPACITY_STEP = 5;
+/** The text card never drops below this, so the words never sit on bare desktop. 0.92
+ * keeps --ink-soft at WCAG AA (≈4.6:1) on the light card even with black right behind it
+ * and no blur. */
+export const NUDGE_CARD_FLOOR = 0.92;
+
+/** Percent, clamped to 10–95 and snapped to steps of 5. Anything unparseable → 45. */
+export function normalizeNudgeOpacity(raw: unknown): number {
+  const n = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
+  if (!Number.isFinite(n)) return NUDGE_OPACITY_DEFAULT;
+  const clamped = Math.min(NUDGE_OPACITY_MAX, Math.max(NUDGE_OPACITY_MIN, n));
+  return Math.round(clamped / NUDGE_OPACITY_STEP) * NUDGE_OPACITY_STEP;
+}
+
+export function getNudgeOpacity(): number {
+  try {
+    return normalizeNudgeOpacity(localStorage.getItem(NUDGE_OPACITY_KEY));
+  } catch {
+    return NUDGE_OPACITY_DEFAULT;
+  }
+}
+
+export function storeNudgeOpacity(percent: number): void {
+  if (isDemo()) return;
+  try {
+    localStorage.setItem(NUDGE_OPACITY_KEY, String(normalizeNudgeOpacity(percent)));
+  } catch {
+    /* not persisted; the slider still works for this session */
+  }
+}
+
+/** Alphas (0–1) for the nudge: the full-window tint, a slightly heavier dark-mode tint
+ * (so dark stays darker than light at the same setting), and the text card, which never
+ * goes below NUDGE_CARD_FLOOR. */
+export function nudgeAlphas(percent: number): { tint: number; tintDark: number; card: number } {
+  const tint = normalizeNudgeOpacity(percent) / 100;
+  const r = (x: number) => Math.round(Math.min(1, x) * 100) / 100;
+  return { tint: r(tint), tintDark: r(tint + 0.15), card: r(Math.max(tint + 0.25, NUDGE_CARD_FLOOR)) };
+}
+
+/** Set the CSS custom properties the nudge styles read (styles.css, .nudge). */
+export function applyNudgeOpacity(el: HTMLElement, percent: number): void {
+  const a = nudgeAlphas(percent);
+  const pct = (x: number) => `${Math.round(x * 100)}%`;
+  el.style.setProperty("--nudge-tint", pct(a.tint));
+  el.style.setProperty("--nudge-tint-dark", pct(a.tintDark));
+  el.style.setProperty("--nudge-card", pct(a.card));
 }
 
 // ---------------------------------------------------------------------------------------
@@ -300,6 +361,7 @@ export interface GuardConfigPayload {
   allowDomains: string[];
   graceSecs: number;
   workday: { enabled: boolean; start: string; end: string; days: number[]; tz: string };
+  blur: boolean;
 }
 
 export function buildGuardConfig(
@@ -320,6 +382,7 @@ export function buildGuardConfig(
     allowDomains: allow.domains,
     graceSecs: prefs.graceSecs,
     workday: { ...prefs.workday, days: WORKDAYS },
+    blur: prefs.blur,
   };
 }
 
@@ -330,6 +393,12 @@ export async function pushGuardConfig(config: GuardConfigPayload): Promise<void>
   } catch (err) {
     console.error("Focusbox: focus guard config push failed", err);
   }
+}
+
+/** Settings → "Preview nudge". "ok", or "real_nudge_open" (a real nudge is up and wins). */
+export async function previewNudge(taskText: string, blur: boolean): Promise<string> {
+  if (!available()) return "unavailable";
+  return invoke<string>("guard_preview_nudge", { taskText, blur });
 }
 
 export async function loadAllowOverrides(): Promise<AllowOverrides> {

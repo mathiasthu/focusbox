@@ -18,6 +18,7 @@ macro_rules! app_commands {
             crate::focusguard::nudge_resolve,
             crate::focusguard::guard_log_newtask,
             crate::focusguard::guard_stats,
+            crate::focusguard::guard_preview_nudge,
             crate::todoist::todoist_status,
             crate::todoist::todoist_set_token,
             crate::todoist::todoist_clear_token,
@@ -182,6 +183,7 @@ mod acl_tests {
             "guard_set_config",
             "guard_log_newtask",
             "guard_stats",
+            "guard_preview_nudge",
             "todoist_set_token",
             "park",
         ] {
@@ -206,6 +208,7 @@ mod acl_tests {
             "spotify_state",
             "guard_supported",
             "guard_log_newtask",
+            "guard_preview_nudge",
         ] {
             assert!(denied(call(&nudge, cmd)), "nudge must not reach {cmd}");
         }

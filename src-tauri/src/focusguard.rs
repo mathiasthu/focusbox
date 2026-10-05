@@ -131,6 +131,9 @@ pub struct GuardConfig {
     pub allow_domains: Vec<String>,
     pub grace_secs: u64,
     pub workday: Workday,
+    /// Native blur (NSVisualEffectView) behind the translucent nudge. Applied when the
+    /// nudge window is created; a change while one is open takes effect on the next one.
+    pub blur: bool,
 }
 
 impl Default for GuardConfig {
@@ -145,6 +148,7 @@ impl Default for GuardConfig {
             allow_domains: Vec::new(),
             grace_secs: 30,
             workday: Workday::default(),
+            blur: true,
         }
     }
 }
@@ -802,6 +806,19 @@ struct Inner {
     /// frontend pushes, so an "Allow" can't be undone by a config push racing the event
     /// that persists it.
     session_allow: std::collections::HashMap<String, (HashSet<String>, HashSet<String>)>,
+    /// A Settings "Preview nudge" on screen. Entirely separate from `machine`: it never
+    /// counts as a drift, never touches escalation and never reaches the log. A real
+    /// nudge always wins over it.
+    preview: Option<Preview>,
+    /// Whether the nudge window currently on screen was built with the blur effect, so a
+    /// mismatch can be rebuilt (macOS can't remove a vibrancy view from a live window).
+    window_blur: Option<bool>,
+}
+
+#[derive(Clone, Debug)]
+struct Preview {
+    payload: NudgePayload,
+    blur: bool,
 }
 
 impl Inner {
@@ -814,7 +831,19 @@ impl Inner {
         cfg
     }
 
+    /// Some(blur) when a nudge (real, else preview) should be on screen.
+    fn wanted(&self) -> Option<bool> {
+        if self.machine.nudge().is_some() {
+            Some(self.cfg.blur)
+        } else {
+            self.preview.as_ref().map(|p| p.blur)
+        }
+    }
+
     fn payload(&self) -> Option<NudgePayload> {
+        if self.machine.nudge().is_none() {
+            return self.preview.as_ref().map(|p| p.payload.clone());
+        }
         match self.machine.nudge()? {
             NudgeKind::Drift { app, count } => Some(NudgePayload {
                 kind: "drift".into(),
@@ -862,6 +891,34 @@ impl GuardState {
         if let (Some(path), Ok(_g)) = (path, self.log_lock.lock()) {
             append_log(&path, &entry);
         }
+    }
+
+    /// Put a preview up. False (and nothing changes) while a real nudge is open.
+    pub fn begin_preview(&self, task: &str, blur: bool) -> bool {
+        let Ok(mut inner) = self.inner.lock() else { return false };
+        if inner.machine.nudge().is_some() {
+            return false;
+        }
+        let task = clip(task);
+        inner.preview = Some(Preview {
+            payload: NudgePayload {
+                kind: "preview".into(),
+                task: if task.is_empty() { "Your task".into() } else { task },
+                label: Some("Example site".into()),
+                app_name: Some("Example site".into()),
+                domain: None,
+                drift_count: 0,
+                reason_required: false,
+                min_reason_chars: MIN_REASON_CHARS,
+            },
+            blur,
+        });
+        true
+    }
+
+    /// Drop the preview. True if one was up.
+    pub fn end_preview(&self) -> bool {
+        self.inner.lock().map(|mut i| i.preview.take().is_some()).unwrap_or(false)
     }
 
     fn log_kind(&self, kind: &str, task: &str, app: Option<&FrontApp>, reason: Option<&str>) {
@@ -926,6 +983,8 @@ fn watch<R: Runtime>(app: AppHandle<R>, state: Arc<GuardState>) {
         for action in actions {
             match action {
                 Action::OpenNudge(kind) => {
+                    // A real nudge replaces any preview on screen (same window, refreshed).
+                    state.end_preview();
                     if let NudgeKind::Drift { app: off, .. } = &kind {
                         state.log_kind("drift", &cfg.task_text, Some(off), None);
                     }
@@ -953,16 +1012,32 @@ fn open_nudge_window<R: Runtime>(app: &AppHandle<R>) {
         let app = handle;
         // Re-check on the main thread: the nudge may have been answered between the
         // caller's decision and now, and an orphan full-screen window has no way out.
-        let still_open = app
-            .state::<Arc<GuardState>>()
-            .inner
-            .lock()
-            .map(|i| i.machine.nudge().is_some())
-            .unwrap_or(false);
-        if !still_open {
+        let state = app.state::<Arc<GuardState>>().inner().clone();
+        let Some((blur, built_with)) =
+            state.inner.lock().ok().and_then(|i| i.wanted().map(|b| (b, i.window_blur)))
+        else {
             return;
-        }
+        };
         if let Some(w) = app.get_webview_window(NUDGE_LABEL) {
+            if cfg!(target_os = "macos") && built_with != Some(blur) {
+                // The blur setting differs from the window on screen, and a vibrancy view
+                // can't be removed from a live NSWindow: rebuild once the old one is gone.
+                if let Ok(mut i) = state.inner.lock() {
+                    i.window_blur = None;
+                }
+                let _ = w.destroy();
+                let later = app.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..30 {
+                        std::thread::sleep(Duration::from_millis(100));
+                        if later.get_webview_window(NUDGE_LABEL).is_none() {
+                            open_nudge_window(&later);
+                            return;
+                        }
+                    }
+                });
+                return;
+            }
             let _ = w.emit_to(NUDGE_LABEL, "guard://nudge-refresh", ());
             let _ = w.show();
             if let Ok(ns) = w.ns_window_ptr() {
@@ -994,15 +1069,19 @@ fn open_nudge_window<R: Runtime>(app: &AppHandle<R>) {
         // (FullScreenUI follows the system light/dark appearance), and the page paints a
         // theme tint over it (styles.css, .nudge). A solid sheet was a flashbang at night.
         // Needs the macos-private-api feature + app.macOSPrivateApi. Windows has no nudge.
+        // The blur is the user's "Blur behind nudge" setting.
         #[cfg(target_os = "macos")]
         {
             use tauri::window::{Effect, EffectState, EffectsBuilder};
-            builder = builder.transparent(true).effects(
-                EffectsBuilder::new()
-                    .effect(Effect::FullScreenUI)
-                    .state(EffectState::Active)
-                    .build(),
-            );
+            builder = builder.transparent(true);
+            if blur {
+                builder = builder.effects(
+                    EffectsBuilder::new()
+                        .effect(Effect::FullScreenUI)
+                        .state(EffectState::Active)
+                        .build(),
+                );
+            }
         }
         match &monitor {
             Some(m) => {
@@ -1015,6 +1094,9 @@ fn open_nudge_window<R: Runtime>(app: &AppHandle<R>) {
         }
         match builder.build() {
             Ok(w) => {
+                if let Ok(mut i) = state.inner.lock() {
+                    i.window_blur = Some(blur);
+                }
                 if let Ok(ns) = w.ns_window_ptr() {
                     unsafe { platform::raise_window(ns) };
                 }
@@ -1085,6 +1167,23 @@ pub fn guard_set_config(state: State<'_, Arc<GuardState>>, config: GuardConfig) 
     Ok(())
 }
 
+/// Settings → "Preview nudge": show the real nudge window with a demo payload, using the
+/// given blur setting. Main window only (see capabilities). Returns "ok", or
+/// "real_nudge_open" when a real nudge is up (it is left alone).
+#[tauri::command]
+pub async fn guard_preview_nudge<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, Arc<GuardState>>,
+    task_text: String,
+    blur: bool,
+) -> Result<String, String> {
+    if !state.begin_preview(&task_text, blur) {
+        return Ok("real_nudge_open".into());
+    }
+    open_nudge_window(&app);
+    Ok("ok".into())
+}
+
 #[tauri::command]
 pub fn get_nudge_state(state: State<'_, Arc<GuardState>>) -> Option<NudgePayload> {
     state.inner.lock().ok().and_then(|i| i.payload())
@@ -1126,7 +1225,10 @@ pub async fn nudge_resolve<R: Runtime>(
         let inner = state.inner.lock().map_err(|_| "guard state poisoned".to_string())?;
         let Some(kind) = inner.machine.nudge().cloned() else {
             drop(inner);
+            // "close" answers a preview (or a window left behind by a race). Nothing is
+            // logged and the drift state is untouched.
             if action == "close" {
+                state.end_preview();
                 close_nudge_window(&app);
                 return Ok("ok".into());
             }
@@ -1216,6 +1318,7 @@ pub async fn nudge_resolve<R: Runtime>(
 fn finish<R: Runtime>(state: &GuardState, app: &AppHandle<R>) {
     if let Ok(mut inner) = state.inner.lock() {
         inner.machine.resolve();
+        inner.preview = None;
     }
     close_nudge_window(app);
 }
@@ -1271,6 +1374,7 @@ mod tests {
             allow_domains: vec!["github.com".into()],
             grace_secs: 30,
             workday: Workday::default(),
+            blur: true,
         }
     }
 
@@ -1628,6 +1732,59 @@ mod tests {
         for action in ["back", "park", "allow"] {
             assert!(reason_needed(&second, action));
         }
+    }
+
+    fn state_logging_to_tmp(tag: &str) -> (GuardState, PathBuf) {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("focusbox-preview-{tag}-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join(LOG_FILE);
+        let state = GuardState::default();
+        *state.log_path.lock().unwrap() = Some(path.clone());
+        (state, path)
+    }
+
+    #[test]
+    fn a_preview_never_counts_escalates_or_logs() {
+        let (state, log) = state_logging_to_tmp("a");
+        assert!(state.begin_preview("  Fix the build  ", false));
+        {
+            let i = state.inner.lock().unwrap();
+            assert!(i.machine.nudge().is_none(), "the drift machine never sees a preview");
+            assert_eq!(i.machine.drift_count(), 0);
+            let p = i.payload().unwrap();
+            assert_eq!(p.kind, "preview");
+            assert_eq!(p.task, "Fix the build");
+            assert_eq!(p.label.as_deref(), Some("Example site"));
+            assert!(!p.reason_required);
+            assert_eq!(i.wanted(), Some(false), "the preview carries its own blur setting");
+        }
+        assert!(state.end_preview());
+        assert!(!state.end_preview());
+        assert!(state.inner.lock().unwrap().payload().is_none());
+        assert!(!log.exists(), "nothing was logged");
+
+        // An empty Focus card previews as "Your task".
+        assert!(state.begin_preview("", true));
+        assert_eq!(state.inner.lock().unwrap().payload().unwrap().task, "Your task");
+    }
+
+    #[test]
+    fn a_real_drift_wins_over_a_preview() {
+        let (state, _) = state_logging_to_tmp("b");
+        let c = cfg();
+        assert!(state.begin_preview("Fix the build", true));
+        {
+            let mut i = state.inner.lock().unwrap();
+            i.cfg = c.clone();
+            let yt = app("com.google.Chrome", Some("youtube.com"));
+            run(&mut i.machine, &c, &yt, 0, 30_000);
+            assert_eq!(i.machine.drift_count(), 1, "a preview doesn't add to the count either");
+            assert_eq!(i.payload().unwrap().kind, "drift", "the real nudge replaces the preview");
+            assert_eq!(i.wanted(), Some(c.blur));
+        }
+        assert!(!state.begin_preview("x", false), "no preview while a real nudge is up");
+        assert_eq!(state.inner.lock().unwrap().payload().unwrap().kind, "drift");
     }
 
     #[test]

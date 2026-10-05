@@ -3,7 +3,13 @@
 // focusGuard.ts, never in the settings sync blob.
 import { useEffect, useState } from "react";
 import {
+  getNudgeOpacity,
   GRACE_OPTIONS,
+  NUDGE_OPACITY_MAX,
+  NUDGE_OPACITY_MIN,
+  NUDGE_OPACITY_STEP,
+  previewNudge,
+  storeNudgeOpacity,
   todoistClearToken,
   todoistSetToken,
   todoistStatus,
@@ -15,6 +21,8 @@ interface Props {
   prefs: GuardPrefs;
   onChange: (next: GuardPrefs) => void;
   onOpenStats: () => void;
+  /** The current Focus card's text, for "Preview nudge" ("" when there is none). */
+  previewTask: string;
 }
 
 function OnOff({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
@@ -135,7 +143,60 @@ function TodoistKey() {
   );
 }
 
-export default function FocusGuardSettings({ prefs, onChange, onOpenStats }: Props) {
+/** "Nudge opacity", "Blur behind nudge" and "Preview nudge". Shown whether or not the
+ * guard is on, so the look can be tuned first. */
+function NudgeLook({ prefs, onChange, previewTask }: Pick<Props, "prefs" | "onChange" | "previewTask">) {
+  const [opacity, setOpacity] = useState(getNudgeOpacity);
+  const [note, setNote] = useState<string | null>(null);
+
+  async function preview() {
+    setNote(null);
+    try {
+      const r = await previewNudge(previewTask, prefs.blur);
+      if (r === "real_nudge_open") setNote("A real reminder is open right now.");
+    } catch (err) {
+      setNote(`Couldn't open the preview: ${String(err)}`);
+    }
+  }
+
+  return (
+    <>
+      <div className="setting__row">
+        <span className="guard-settings__label">Nudge opacity</span>
+        <div className="guard-settings__range">
+          <input
+            type="range"
+            min={NUDGE_OPACITY_MIN}
+            max={NUDGE_OPACITY_MAX}
+            step={NUDGE_OPACITY_STEP}
+            value={opacity}
+            aria-label="Nudge opacity"
+            aria-valuetext={`${opacity}%`}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setOpacity(v);
+              storeNudgeOpacity(v);
+            }}
+          />
+          <span className="guard-settings__value">{opacity}%</span>
+        </div>
+      </div>
+      <div className="setting__row">
+        <span className="guard-settings__label">Blur behind nudge</span>
+        <OnOff label="Blur behind nudge" value={prefs.blur} onChange={(v) => onChange({ ...prefs, blur: v })} />
+      </div>
+      <div className="setting__row">
+        <span className="setting__hint">Lower opacity shows more of your screen behind the reminder.</span>
+        <button type="button" className="account__btn" onClick={() => void preview()}>
+          Preview nudge
+        </button>
+      </div>
+      {note && <span className="account__status">{note}</span>}
+    </>
+  );
+}
+
+export default function FocusGuardSettings({ prefs, onChange, onOpenStats, previewTask }: Props) {
   const set = (patch: Partial<GuardPrefs>) => onChange({ ...prefs, ...patch });
   const setWorkday = (patch: Partial<GuardPrefs["workday"]>) =>
     onChange({ ...prefs, workday: { ...prefs.workday, ...patch } });
@@ -228,6 +289,8 @@ export default function FocusGuardSettings({ prefs, onChange, onOpenStats }: Pro
           )}
         </>
       )}
+
+      <NudgeLook prefs={prefs} onChange={onChange} previewTask={previewTask} />
 
       <TodoistKey />
 

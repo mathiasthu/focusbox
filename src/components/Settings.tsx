@@ -76,6 +76,7 @@ interface Props {
   guardPrefs: GuardPrefs;
   onGuardPrefsChange: (next: GuardPrefs) => void;
   onOpenGuardStats: () => void;
+  guardPreviewTask: string;
   sync: SyncController;
   demo: boolean;
 }
@@ -103,6 +104,7 @@ export default function Settings({
   guardPrefs,
   onGuardPrefsChange,
   onOpenGuardStats,
+  guardPreviewTask,
   sync,
   demo,
 }: Props) {
@@ -297,7 +299,12 @@ export default function Settings({
 
         {/* Device-local like "Start on login": stored in localStorage, never synced. */}
         {guardAvailable && (
-          <FocusGuardSettings prefs={guardPrefs} onChange={onGuardPrefsChange} onOpenStats={onOpenGuardStats} />
+          <FocusGuardSettings
+            prefs={guardPrefs}
+            onChange={onGuardPrefsChange}
+            onOpenStats={onOpenGuardStats}
+            previewTask={guardPreviewTask}
+          />
         )}
 
         {isSpotifyAvailable && (

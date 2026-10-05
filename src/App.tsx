@@ -576,6 +576,7 @@ export default function App() {
         guardPrefs={guardPrefs}
         onGuardPrefsChange={setGuardPrefs}
         onOpenGuardStats={() => setGuardStatsOpen(true)}
+        guardPreviewTask={focusTask && !focusTask.done ? focusTask.text : ""}
         sync={sync}
         demo={demo}
       />

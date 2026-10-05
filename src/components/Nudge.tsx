@@ -7,11 +7,18 @@
 // event listening — no store, sync or Todoist-key access.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { isValidReason, MIN_REASON_CHARS, parkResultMessage } from "../lib/focusGuard";
+import {
+  applyNudgeOpacity,
+  getNudgeOpacity,
+  isValidReason,
+  MIN_REASON_CHARS,
+  NUDGE_OPACITY_KEY,
+  parkResultMessage,
+} from "../lib/focusGuard";
 import { applyTheme, getStoredMode } from "../lib/theme";
 
 interface NudgePayload {
-  kind: "drift" | "needTask";
+  kind: "drift" | "needTask" | "preview";
   task: string;
   label: string | null;
   appName: string | null;
@@ -36,6 +43,31 @@ export default function Nudge() {
   // Same theme as the main window: main.tsx already applied the stored mode before the
   // first paint. Keep following it while the nudge is up: macOS switching light/dark
   // (for "system"), or the setting changing in the main window (same-origin storage).
+  // The tint strength (Settings → "Nudge opacity"). Re-read on `storage` events so the
+  // slider moves a preview live, plus a 1s re-read as a backstop in case storage events
+  // don't cross between this window and the main one.
+  useEffect(() => {
+    const root = document.documentElement;
+    let last = -1;
+    const sync = () => {
+      const p = getNudgeOpacity();
+      if (p !== last) {
+        last = p;
+        applyNudgeOpacity(root, p);
+      }
+    };
+    sync();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === null || e.key === NUDGE_OPACITY_KEY) sync();
+    };
+    window.addEventListener("storage", onStorage);
+    const timer = window.setInterval(sync, 1000);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.clearInterval(timer);
+    };
+  }, []);
+
   useEffect(() => {
     const sync = () => applyTheme(getStoredMode());
     const mql = window.matchMedia?.("(prefers-color-scheme: dark)");
@@ -117,6 +149,27 @@ export default function Nudge() {
           <div className="nudge__actions">
             <button className="nudge__btn nudge__btn--primary" disabled={busy} onClick={() => void resolve("close")}>
               Close
+            </button>
+          </div>
+          {error && <p className="nudge__error">{error}</p>}
+        </div>
+      </div>
+    );
+  }
+
+  if (state.kind === "preview") {
+    // Settings → "Preview nudge". Rust keeps this out of the drift machine and the log.
+    return (
+      <div className="nudge">
+        <div className="nudge__panel">
+          <p className="nudge__eyebrow">
+            Preview · You drifted to <strong>{state.label ?? "Example site"}</strong>
+          </p>
+          <h1 className="nudge__task">{state.task || "Your task"}</h1>
+          <p className="nudge__sub">This is how the reminder looks. Adjust it in Settings, Focus guard.</p>
+          <div className="nudge__actions">
+            <button className="nudge__btn nudge__btn--primary" disabled={busy} onClick={() => void resolve("close")}>
+              Close preview
             </button>
           </div>
           {error && <p className="nudge__error">{error}</p>}

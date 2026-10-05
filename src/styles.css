@@ -1812,11 +1812,12 @@ body::after {
 /* The nudge window is transparent on macOS (focusguard.rs) with a native blur behind
    the page, so the page itself must not paint anything opaque: no body colour, no
    gradient, no film grain. The theme comes from .nudge's tint instead.
-   Contrast (WCAG AA), worst cases with no blur at all:
-   - light, black page behind: tint ≈ #aca89f; the panel (90% paper over it) ≈ #f3efe7,
-     so --ink-soft is ~5:1 and --ink far above;
-   - dark, white page behind: tint ≈ #3c3936 (dim, never bright at night); panel darker
-     still, --ink-soft ~4.7:1 or better. */
+   The tint strength is the user's "Nudge opacity" setting: Nudge.tsx sets --nudge-tint,
+   --nudge-tint-dark and --nudge-card (focusGuard.ts nudgeAlphas). The fallbacks below
+   are the 45% default. The text card has a 92% floor, so contrast doesn't depend on
+   the setting. Worst case, no blur and nothing from the tint:
+   - light card over black: ≈ #e7e3dc, --ink-soft ≈ 4.6:1 (AA), --ink far above;
+   - dark card over white: ≈ #34302d (never bright at night), --ink-soft ≈ 5.5:1. */
 .nudge-root,
 .nudge-root body,
 .nudge-root #root {
@@ -1835,12 +1836,12 @@ body::after {
   place-items: center;
   padding: 32px;
   /* fallback for engines without color-mix */
-  background: rgba(239, 233, 221, 0.72);
-  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  background: rgba(239, 233, 221, 0.45);
+  background: color-mix(in srgb, var(--bg) var(--nudge-tint, 45%), transparent);
 }
 :root[data-theme="dark"] .nudge {
-  background: rgba(26, 23, 20, 0.86);
-  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  background: rgba(26, 23, 20, 0.6);
+  background: color-mix(in srgb, var(--bg) var(--nudge-tint-dark, 60%), transparent);
 }
 .nudge__panel {
   width: min(680px, 100%);
@@ -1850,14 +1851,30 @@ body::after {
   padding: 32px 36px;
   border-radius: 20px;
   border: 1px solid var(--line);
-  background: rgba(251, 247, 239, 0.9);
-  background: color-mix(in srgb, var(--paper) 90%, transparent);
+  background: rgba(251, 247, 239, 0.92);
+  background: color-mix(in srgb, var(--paper) var(--nudge-card, 92%), transparent);
   box-shadow: var(--shadow);
   animation: pop-in 0.2s ease both;
 }
 :root[data-theme="dark"] .nudge__panel {
-  background: rgba(34, 30, 26, 0.9);
-  background: color-mix(in srgb, var(--paper) 90%, transparent);
+  background: rgba(34, 30, 26, 0.92);
+  background: color-mix(in srgb, var(--paper) var(--nudge-card, 92%), transparent);
+}
+/* Settings → "Nudge opacity" slider */
+.guard-settings__range {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.guard-settings__range input[type="range"] {
+  width: 150px;
+  accent-color: var(--accent);
+}
+.guard-settings__value {
+  min-width: 3ch;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
 }
 .nudge__eyebrow {
   margin: 0;
