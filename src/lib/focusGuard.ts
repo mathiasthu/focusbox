@@ -144,6 +144,8 @@ export interface DayStats {
   /** Local calendar day, "YYYY-MM-DD". */
   day: string;
   focusedMinutes: number;
+  /** Idle or locked while the guard was active. */
+  awayMinutes: number;
   drifts: number;
   /** Top 5 off-task sites/apps by drift count. */
   topDrift: { label: string; count: number }[];
@@ -159,12 +161,12 @@ export function localDay(ts: number): string {
 
 /** Bucket raw log entries by local day, newest day first. Today is always present. */
 export function aggregateStats(entries: GuardLogEntry[], now: number): DayStats[] {
-  type Acc = { secs: number; drifts: number; by: Map<string, number>; switches: DayStats["switches"]; parked: DayStats["parked"] };
+  type Acc = { secs: number; away: number; drifts: number; by: Map<string, number>; switches: DayStats["switches"]; parked: DayStats["parked"] };
   const days = new Map<string, Acc>();
   const acc = (day: string): Acc => {
     let a = days.get(day);
     if (!a) {
-      a = { secs: 0, drifts: 0, by: new Map(), switches: [], parked: [] };
+      a = { secs: 0, away: 0, drifts: 0, by: new Map(), switches: [], parked: [] };
       days.set(day, a);
     }
     return a;
@@ -175,6 +177,9 @@ export function aggregateStats(entries: GuardLogEntry[], now: number): DayStats[
     switch (e.kind) {
       case "focused_secs":
         a.secs += Math.max(0, e.secs ?? 0);
+        break;
+      case "away_secs":
+        a.away += Math.max(0, e.secs ?? 0);
         break;
       case "drift": {
         a.drifts += 1;
@@ -199,6 +204,7 @@ export function aggregateStats(entries: GuardLogEntry[], now: number): DayStats[
     .map(([day, a]) => ({
       day,
       focusedMinutes: Math.round(a.secs / 60),
+      awayMinutes: Math.round(a.away / 60),
       drifts: a.drifts,
       topDrift: [...a.by.entries()]
         .sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))
@@ -214,6 +220,8 @@ export function aggregateStats(entries: GuardLogEntry[], now: number): DayStats[
 // ---------------------------------------------------------------------------------------
 
 export const GRACE_OPTIONS = [15, 30, 60, 120] as const;
+/** "Idle after" choices, minutes. No hardware input this long = away (guard pauses). */
+export const IDLE_OPTIONS = [1, 2, 3, 5, 10] as const;
 
 export interface GuardPrefs {
   enabled: boolean;
@@ -223,6 +231,8 @@ export interface GuardPrefs {
   workday: { enabled: boolean; start: string; end: string; tz: string };
   /** Native blur behind the translucent nudge (macOS). */
   blur: boolean;
+  /** Minutes without hardware input before the guard counts the user as away. */
+  idleMins: number;
 }
 
 export const DEFAULT_GUARD_PREFS: GuardPrefs = {
@@ -231,6 +241,7 @@ export const DEFAULT_GUARD_PREFS: GuardPrefs = {
   blockCompletely: false,
   workday: { enabled: false, start: "10:00", end: "19:00", tz: "Asia/Bangkok" },
   blur: true,
+  idleMins: 3,
 };
 
 /** Mon–Sat. Fixed for now; the Rust side takes a list so this can become a setting. */
@@ -255,6 +266,7 @@ export function normalizePrefs(raw: unknown): GuardPrefs {
       tz: typeof w.tz === "string" && w.tz.trim() ? w.tz.trim() : d.workday.tz,
     },
     blur: r.blur !== false,
+    idleMins: (IDLE_OPTIONS as readonly number[]).includes(r.idleMins as number) ? (r.idleMins as number) : d.idleMins,
   };
 }
 
@@ -362,6 +374,7 @@ export interface GuardConfigPayload {
   graceSecs: number;
   workday: { enabled: boolean; start: string; end: string; days: number[]; tz: string };
   blur: boolean;
+  idleAfterSecs: number;
 }
 
 export function buildGuardConfig(
@@ -383,6 +396,7 @@ export function buildGuardConfig(
     graceSecs: prefs.graceSecs,
     workday: { ...prefs.workday, days: WORKDAYS },
     blur: prefs.blur,
+    idleAfterSecs: prefs.idleMins * 60,
   };
 }
 

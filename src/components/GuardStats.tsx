@@ -17,7 +17,7 @@ function minutes(n: number): string {
 }
 
 function Day({ s, today }: { s: DayStats; today: string }) {
-  const empty = !s.focusedMinutes && !s.drifts && !s.switches.length && !s.parked.length;
+  const empty = !s.focusedMinutes && !s.awayMinutes && !s.drifts && !s.switches.length && !s.parked.length;
   return (
     <section className="guard-stats__day">
       <h3 className="guard-stats__title">{dayTitle(s.day, today)}</h3>
@@ -28,6 +28,9 @@ function Day({ s, today }: { s: DayStats; today: string }) {
           <div className="guard-stats__numbers">
             <span>
               <strong>{minutes(s.focusedMinutes)}</strong> focused
+            </span>
+            <span>
+              <strong>{minutes(s.awayMinutes)}</strong> away
             </span>
             <span>
               <strong>{s.drifts}</strong> {s.drifts === 1 ? "drift" : "drifts"}

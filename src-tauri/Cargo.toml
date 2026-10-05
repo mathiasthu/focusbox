@@ -43,7 +43,9 @@ chrono-tz = "0.10"
 # The Todoist token lives in the login Keychain.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSArray"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSDictionary", "NSValue", "NSURL"] }
+# proc_pidpath, to tie a browser helper process holding a video assertion to its app.
+libc = "0.2"
 objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication", "NSWindow", "NSResponder", "libc"] }
 keyring = { version = "3", features = ["apple-native"] }
 

@@ -35,8 +35,11 @@ const TICK: Duration = Duration::from_secs(2);
 /// Longest gap one sample may account for. A sleeping Mac or a stalled thread must not turn
 /// into "off task for 40 minutes" the moment it wakes up.
 const MAX_STEP_MS: u64 = 5_000;
-/// Focused time is logged in whole minutes while on task.
+/// Focused time is logged in whole minutes while on task (away time likewise).
 const FOCUSED_CHUNK_MS: u64 = 60_000;
+/// On task, no input still counts as focused (waiting on a build or an AI agent,
+/// reading) for this long; past it the user is away.
+const LONG_IDLE_MS: u64 = 15 * 60_000;
 /// Whole-workday mode: first "pick a task" nudge after this long without one...
 const NEED_TASK_FIRST_MS: u64 = 2 * 60_000;
 /// ...then again this long after each dismissal.
@@ -134,6 +137,8 @@ pub struct GuardConfig {
     /// Native blur (NSVisualEffectView) behind the translucent nudge. Applied when the
     /// nudge window is created; a change while one is open takes effect on the next one.
     pub blur: bool,
+    /// No hardware input for this long (and no video in the app in front) = away.
+    pub idle_after_secs: u64,
 }
 
 impl Default for GuardConfig {
@@ -149,6 +154,7 @@ impl Default for GuardConfig {
             grace_secs: 30,
             workday: Workday::default(),
             blur: true,
+            idle_after_secs: 180,
         }
     }
 }
@@ -277,7 +283,7 @@ pub fn url_host(raw: &str) -> Option<String> {
 // The drift state machine (pure)
 // ---------------------------------------------------------------------------------------
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct FrontApp {
     pub bundle_id: Option<String>,
     pub name: String,
@@ -285,6 +291,11 @@ pub struct FrontApp {
     pub domain: Option<String>,
     /// The frontmost process is this one (covers the dev build, which has no bundle id).
     pub is_self: bool,
+    /// Seconds since the last real (HID) keyboard/mouse/trackpad input.
+    pub idle_secs: u64,
+    /// The app in front holds a display-sleep assertion (a video playing). Only looked
+    /// up once `idle_secs` reaches the idle threshold; false otherwise.
+    pub video: bool,
 }
 
 impl FrontApp {
@@ -299,6 +310,20 @@ pub enum Sample {
     /// Screen locked / screen saver / nothing frontmost: neither on nor off task.
     Away,
     Front(FrontApp),
+}
+
+/// Whether the user counts as away from this sample.
+/// - Off task: no input for the idle threshold, unless the app in front plays video
+///   (watching YouTube passively is drift, not absence).
+/// - On task: quiet time is still work (waiting on an agent, reading) up to
+///   LONG_IDLE_MS; past that, away.
+pub fn is_away(cfg: &GuardConfig, app: &FrontApp, on_task: bool) -> bool {
+    let idle_ms = app.idle_secs.saturating_mul(1000);
+    if on_task {
+        idle_ms >= LONG_IDLE_MS
+    } else {
+        idle_ms >= cfg.idle_after_secs.max(1).saturating_mul(1000) && !app.video
+    }
 }
 
 pub fn is_on_task(cfg: &GuardConfig, app: &FrontApp) -> bool {
@@ -330,6 +355,8 @@ pub enum Action {
     CloseNudge,
     /// Seconds of on-task time to log against `task`.
     Focused { task: String, secs: u64 },
+    /// Seconds the user was away (idle or locked) while the guard was active.
+    Away { task: String, secs: u64 },
 }
 
 #[derive(Debug)]
@@ -345,6 +372,7 @@ pub struct Machine {
     nudge: Option<NudgeKind>,
     need_ms: u64,
     need_threshold_ms: u64,
+    away_ms: u64,
 }
 
 impl Default for Machine {
@@ -361,6 +389,7 @@ impl Default for Machine {
             nudge: None,
             need_ms: 0,
             need_threshold_ms: NEED_TASK_FIRST_MS,
+            away_ms: 0,
         }
     }
 }
@@ -385,6 +414,22 @@ impl Machine {
         }
     }
 
+    fn flush_away(&mut self, out: &mut Vec<Action>) {
+        let secs = self.away_ms / 1000;
+        self.away_ms = 0;
+        if secs > 0 {
+            out.push(Action::Away { task: self.task_text.clone(), secs });
+        }
+    }
+
+    fn add_away(&mut self, dt: u64, out: &mut Vec<Action>) {
+        self.away_ms += dt;
+        while self.away_ms >= FOCUSED_CHUNK_MS {
+            self.away_ms -= FOCUSED_CHUNK_MS;
+            out.push(Action::Away { task: self.task_text.clone(), secs: FOCUSED_CHUNK_MS / 1000 });
+        }
+    }
+
     /// Advance by one sample taken at monotonic time `now_ms`. `sample` is None when the
     /// caller skipped sampling (idle mode).
     pub fn step(
@@ -404,6 +449,7 @@ impl Machine {
         // A different task is a new task session.
         if cfg.task_key != self.task_key {
             self.flush_focused(&mut out);
+            self.flush_away(&mut out);
             self.task_key = cfg.task_key.clone();
             self.drift_count = 0;
             self.off_ms = 0;
@@ -419,6 +465,7 @@ impl Machine {
             if self.mode == Mode::Guard {
                 self.flush_focused(&mut out);
             }
+            self.flush_away(&mut out);
             let keep = matches!(
                 (&self.nudge, mode),
                 (Some(NudgeKind::Drift { .. }), Mode::Guard) | (Some(NudgeKind::NeedTask), Mode::NeedTask)
@@ -436,13 +483,26 @@ impl Machine {
         }
 
         match (mode, sample) {
-            (Mode::Idle, _) | (_, None) | (_, Some(Sample::Away)) => {}
+            (Mode::Idle, _) | (_, None) => {}
+            // Locked / screen saver: away. Counters pause; nothing resets.
+            (_, Some(Sample::Away)) => {
+                if self.nudge.is_none() {
+                    self.add_away(dt, &mut out);
+                }
+            }
             (Mode::Guard, Some(Sample::Front(app))) => {
-                // Frozen while a nudge is up: it is resolved by the user, not by time.
+                // Frozen while a nudge is up: it is resolved by the user, not by time, and
+                // walking away doesn't close it either.
                 if self.nudge.is_some() {
                     return out;
                 }
-                if is_on_task(cfg, app) {
+                let on_task = is_on_task(cfg, app);
+                if is_away(cfg, app, on_task) {
+                    // Paused, not reset: the off-task count resumes where it was.
+                    self.add_away(dt, &mut out);
+                    return out;
+                }
+                if on_task {
                     self.off_ms = 0;
                     if !app.is_self {
                         if let Some(b) = &app.bundle_id {
@@ -470,8 +530,11 @@ impl Machine {
                     }
                 }
             }
-            (Mode::NeedTask, Some(Sample::Front(_))) => {
-                if self.nudge.is_none() {
+            (Mode::NeedTask, Some(Sample::Front(app))) => {
+                if self.nudge.is_none() && is_away(cfg, app, false) {
+                    // The 2/10-minute "pick a task" timers pause while nobody is there.
+                    self.add_away(dt, &mut out);
+                } else if self.nudge.is_none() {
                     self.need_ms += dt;
                     if self.need_ms >= self.need_threshold_ms {
                         self.need_ms = 0;
@@ -628,7 +691,15 @@ fn prune_log_file(path: &Path) {
 
 #[cfg(target_os = "macos")]
 mod platform {
+    //! Read-only toward other apps: the only things read are the frontmost app
+    //! (NSWorkspace), the HID idle time (CoreGraphics), power assertions (IOKit) and, for a
+    //! supported browser while the user is active, its tab address (osascript). No events
+    //! are synthesized; no other app is activated except by the explicit "Back to task".
     use super::{url_host, FrontApp, Sample, AWAY_BUNDLES, BROWSERS};
+    use objc2::runtime::AnyObject;
+    use objc2::rc::Retained;
+    use objc2_foundation::{NSArray, NSDictionary, NSNumber};
+    use std::sync::Mutex;
     use objc2_app_kit::{
         NSApplicationActivationOptions, NSRunningApplication, NSStatusWindowLevel, NSWindow,
         NSWindowCollectionBehavior, NSWorkspace,
@@ -640,6 +711,107 @@ mod platform {
 
     pub const SUPPORTED: bool = true;
     const OSASCRIPT_TIMEOUT: Duration = Duration::from_millis(1500);
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
+    }
+    #[link(name = "IOKit", kind = "framework")]
+    extern "C" {
+        fn IOPMCopyAssertionsByProcess(assertions_by_pid: *mut *mut std::ffi::c_void) -> i32;
+    }
+    /// kCGEventSourceStateHIDSystemState: only real hardware input resets it, so synthetic
+    /// events (automation driving a browser over CDP, scripts) never make the user look
+    /// present.
+    const HID_SYSTEM_STATE: i32 = 1;
+    /// kCGAnyInputEventType (~0).
+    const ANY_INPUT_EVENT: u32 = u32::MAX;
+    /// Assertion types that keep the display awake: what video playback takes. System-
+    /// sleep-only assertions (PreventUserIdleSystemSleep, e.g. `caffeinate -i`) don't count.
+    const DISPLAY_ASSERTIONS: &[&str] = &["PreventUserIdleDisplaySleep", "NoDisplaySleepAssertion"];
+
+    /// Last tab host read per frontmost pid. While the user is idle the browser isn't
+    /// queried (no point poking it, and its tab can't have changed by the user's hand), so
+    /// the last known host stands in.
+    static LAST_HOST: Mutex<Option<(i32, Option<String>)>> = Mutex::new(None);
+
+    /// Seconds since the last hardware keyboard/mouse/trackpad input. No permission needed.
+    fn hid_idle_secs() -> u64 {
+        let s = unsafe { CGEventSourceSecondsSinceLastEventType(HID_SYSTEM_STATE, ANY_INPUT_EVENT) };
+        if s.is_finite() && s > 0.0 {
+            s as u64
+        } else {
+            0
+        }
+    }
+
+    fn pid_path(pid: i32) -> Option<String> {
+        let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
+        if n <= 0 {
+            return None;
+        }
+        buf.truncate(n as usize);
+        String::from_utf8(buf).ok()
+    }
+
+    fn number(o: &AnyObject) -> Option<i32> {
+        o.downcast_ref::<NSNumber>().map(|n| n.intValue())
+    }
+
+    /// Whether the frontmost app holds a display-sleep assertion (video playing).
+    ///
+    /// The assertion counts as the front app's when it is held by the front app's pid,
+    /// made on its behalf (`AssertionOnBehalfOfPID`, which WebKit sets for its media
+    /// processes), or held by a process whose executable lives inside the front app's
+    /// bundle (Chrome/Arc "Helper (Renderer/GPU)" processes are nested in the .app).
+    /// Bundle-path containment was chosen over walking parent pids: helpers are often
+    /// launched via launchd/XPC, so the parent chain doesn't reliably reach the app.
+    /// Anything else, including background `caffeinate`, is ignored. Any failure = no video.
+    fn video_in_front(front_pid: i32, bundle_path: Option<&str>) -> bool {
+        let mut raw: *mut std::ffi::c_void = std::ptr::null_mut();
+        if unsafe { IOPMCopyAssertionsByProcess(&mut raw) } != 0 || raw.is_null() {
+            return false;
+        }
+        // CFDictionary is toll-free bridged to NSDictionary; "Copy" = we own it, and
+        // Retained releases it on drop. Every level is type-checked before use.
+        let Some(dict) = (unsafe { Retained::from_raw(raw.cast::<NSDictionary<AnyObject, AnyObject>>()) })
+        else {
+            return false;
+        };
+        let bundle_prefix = bundle_path.map(|p| format!("{}/", p.trim_end_matches('/')));
+        let type_key = objc2_foundation::NSString::from_str("AssertType");
+        let behalf_key = objc2_foundation::NSString::from_str("AssertionOnBehalfOfPID");
+        let keys = dict.allKeys();
+        for i in 0..keys.count() {
+            let key = keys.objectAtIndex(i);
+            let Some(pid) = number(&key) else { continue };
+            let Some(list) = dict.objectForKey(&key) else { continue };
+            let Some(list) = list.downcast_ref::<NSArray>() else { continue };
+            for j in 0..list.count() {
+                let item = list.objectAtIndex(j);
+                let Some(a) = item.downcast_ref::<NSDictionary>() else { continue };
+                let ty = a
+                    .objectForKey(&type_key)
+                    .and_then(|t| t.downcast_ref::<objc2_foundation::NSString>().map(|s| s.to_string()));
+                if !ty.map(|t| DISPLAY_ASSERTIONS.contains(&t.as_str())).unwrap_or(false) {
+                    continue;
+                }
+                if pid == front_pid {
+                    return true;
+                }
+                if a.objectForKey(&behalf_key).and_then(|o| number(&o)) == Some(front_pid) {
+                    return true;
+                }
+                if let (Some(prefix), Some(path)) = (&bundle_prefix, pid_path(pid)) {
+                    if path.starts_with(prefix.as_str()) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
 
     /// Run a constant AppleScript with a hard deadline. None on any failure: permission
     /// denied (-1743), no window, timeout.
@@ -680,11 +852,16 @@ mod platform {
     ///
     /// Runs inside its own autorelease pool: the watcher thread never exits, so anything
     /// AppKit autoreleases here would otherwise pile up for the life of the process.
-    pub fn sample() -> Sample {
-        objc2::rc::autoreleasepool(|_| sample_inner())
+    /// `idle_after_secs` is the user's idle threshold: past it, the browser isn't queried
+    /// and the (IOKit) video check runs instead. Below it, the video check is skipped, which
+    /// keeps the 2s loop cheap.
+    pub fn sample(idle_after_secs: u64) -> Sample {
+        objc2::rc::autoreleasepool(|_| sample_inner(idle_after_secs))
     }
 
-    fn sample_inner() -> Sample {
+    fn sample_inner(idle_after_secs: u64) -> Sample {
+        let idle_secs = hid_idle_secs();
+        let idle = idle_secs >= idle_after_secs.max(1);
         let ws = NSWorkspace::sharedWorkspace();
         let Some(app) = ws.frontmostApplication() else {
             return Sample::Away;
@@ -700,16 +877,31 @@ mod platform {
             .map(|s| s.to_string())
             .or_else(|| bundle_id.clone())
             .unwrap_or_else(|| "Unknown app".into());
-        let is_self = app.processIdentifier() == std::process::id() as i32;
-        let domain = match &bundle_id {
-            Some(b) if !is_self => BROWSERS
-                .iter()
-                .find(|(id, _)| id == b)
-                .and_then(|(_, script)| osascript(script))
-                .and_then(|u| url_host(&u)),
+        let pid = app.processIdentifier();
+        let is_self = pid == std::process::id() as i32;
+        let browser = match &bundle_id {
+            Some(b) if !is_self => BROWSERS.iter().find(|(id, _)| id == b),
             _ => None,
         };
-        Sample::Front(FrontApp { bundle_id, name, domain, is_self })
+        let domain = match browser {
+            None => None,
+            Some(_) if idle => LAST_HOST
+                .lock()
+                .ok()
+                .and_then(|c| c.as_ref().filter(|(p, _)| *p == pid).and_then(|(_, h)| h.clone())),
+            Some((_, script)) => {
+                let host = osascript(script).and_then(|u| url_host(&u));
+                if let Ok(mut c) = LAST_HOST.lock() {
+                    *c = Some((pid, host.clone()));
+                }
+                host
+            }
+        };
+        let video = idle && !is_self && {
+            let bundle_path = app.bundleURL().and_then(|u| u.path()).map(|p| p.to_string());
+            video_in_front(pid, bundle_path.as_deref())
+        };
+        Sample::Front(FrontApp { bundle_id, name, domain, is_self, idle_secs, video })
     }
 
     /// Bring a running app forward. False if it isn't running.
@@ -763,7 +955,7 @@ mod platform {
 
     pub const SUPPORTED: bool = false;
 
-    pub fn sample() -> Sample {
+    pub fn sample(_idle_after_secs: u64) -> Sample {
         Sample::Away
     }
     pub fn activate_bundle(_bundle: &str) -> bool {
@@ -974,7 +1166,11 @@ fn watch<R: Runtime>(app: AppHandle<R>, state: Arc<GuardState>) {
         if nudge_up && app.get_webview_window(NUDGE_LABEL).is_none() {
             open_nudge_window(&app);
         }
-        let sample = if mode == Mode::Idle || nudge_up { None } else { Some(platform::sample()) };
+        let sample = if mode == Mode::Idle || nudge_up {
+            None
+        } else {
+            Some(platform::sample(cfg.idle_after_secs))
+        };
         let now_ms = epoch.elapsed().as_millis() as u64;
         let actions = {
             let Ok(mut inner) = state.inner.lock() else { return };
@@ -991,6 +1187,16 @@ fn watch<R: Runtime>(app: AppHandle<R>, state: Arc<GuardState>) {
                     open_nudge_window(&app);
                 }
                 Action::CloseNudge => close_nudge_window(&app),
+                Action::Away { task, secs } => state.log(LogEntry {
+                    ts: now_epoch_ms(),
+                    kind: "away_secs".into(),
+                    task: clip(&task),
+                    app: None,
+                    domain: None,
+                    reason: None,
+                    text: None,
+                    secs: Some(secs),
+                }),
                 Action::Focused { task, secs } => state.log(LogEntry {
                     ts: now_epoch_ms(),
                     kind: "focused_secs".into(),
@@ -1162,6 +1368,7 @@ pub fn guard_set_config(state: State<'_, Arc<GuardState>>, config: GuardConfig) 
         task_text: clip(&config.task_text),
         task_key: clip(&config.task_key),
         grace_secs: config.grace_secs.clamp(5, 3600),
+        idle_after_secs: config.idle_after_secs.clamp(60, 3600),
         ..config
     };
     Ok(())
@@ -1375,6 +1582,7 @@ mod tests {
             grace_secs: 30,
             workday: Workday::default(),
             blur: true,
+            idle_after_secs: 180,
         }
     }
 
@@ -1384,7 +1592,26 @@ mod tests {
             name: bundle.rsplit('.').next().unwrap().into(),
             domain: domain.map(str::to_string),
             is_self: false,
+            ..Default::default()
         })
+    }
+
+    /// Like `app`, with HID idle seconds and the video flag set.
+    fn idle_app(bundle: &str, domain: Option<&str>, idle_secs: u64, video: bool) -> Sample {
+        let Sample::Front(mut a) = app(bundle, domain) else { unreachable!() };
+        a.idle_secs = idle_secs;
+        a.video = video;
+        Sample::Front(a)
+    }
+
+    fn sum_secs(actions: &[Action], away: bool) -> u64 {
+        actions
+            .iter()
+            .filter_map(|a| match (a, away) {
+                (Action::Away { secs, .. }, true) | (Action::Focused { secs, .. }, false) => Some(*secs),
+                _ => None,
+            })
+            .sum()
     }
 
     /// Feed the same sample every 2s from `from` up to and including `to` (ms).
@@ -1437,13 +1664,14 @@ mod tests {
     #[test]
     fn on_task_checks_self_apps_and_domains() {
         let c = cfg();
-        let me = FrontApp { bundle_id: None, name: "focusbox".into(), domain: None, is_self: true };
+        let me = FrontApp { bundle_id: None, name: "focusbox".into(), domain: None, is_self: true, ..Default::default() };
         assert!(is_on_task(&c, &me));
         let packaged = FrontApp {
             bundle_id: Some(SELF_BUNDLE_ID.into()),
             name: "Focusbox".into(),
             domain: None,
             is_self: false,
+            ..Default::default()
         };
         assert!(is_on_task(&c, &packaged));
         let Sample::Front(code) = app("com.microsoft.vscode", None) else { unreachable!() };
@@ -1566,7 +1794,7 @@ mod tests {
         let yt = app("com.google.Chrome", Some("youtube.com"));
         run(&mut m, &c, &yt, 0, 20_000); // 20s off
         for t in (22_000..=600_000).step_by(2000) {
-            assert!(m.step(&c, Mode::Guard, Some(&Sample::Away), t).is_empty());
+            assert_eq!(opened(&m.step(&c, Mode::Guard, Some(&Sample::Away), t)), 0);
         }
         // Back from the lock: the first sample after it may add at most MAX_STEP_MS.
         let a = run(&mut m, &c, &yt, 602_000, 602_000);
@@ -1658,7 +1886,7 @@ mod tests {
         let c = cfg();
         let mut m = Machine::default();
         run(&mut m, &c, &app("com.microsoft.VSCode", None), 0, 2000);
-        let me = Sample::Front(FrontApp { bundle_id: None, name: "focusbox".into(), domain: None, is_self: true });
+        let me = Sample::Front(FrontApp { bundle_id: None, name: "focusbox".into(), domain: None, is_self: true, ..Default::default() });
         run(&mut m, &c, &me, 4000, 6000);
         assert_eq!(m.last_on_task_bundle(), Some("com.microsoft.VSCode"));
     }
@@ -1703,7 +1931,7 @@ mod tests {
 
     #[test]
     fn first_drift_is_free_then_every_way_out_needs_a_reason() {
-        let off = FrontApp { bundle_id: None, name: "Slack".into(), domain: None, is_self: false };
+        let off = FrontApp { bundle_id: None, name: "Slack".into(), domain: None, is_self: false, ..Default::default() };
         let first = NudgeKind::Drift { app: off.clone(), count: 1 };
         let repeat = NudgeKind::Drift { app: off, count: 2 };
         for action in ["back", "park", "allow"] {
@@ -1785,6 +2013,111 @@ mod tests {
         }
         assert!(!state.begin_preview("x", false), "no preview while a real nudge is up");
         assert_eq!(state.inner.lock().unwrap().payload().unwrap().kind, "drift");
+    }
+
+    // --- idle / away ---
+
+    #[test]
+    fn idle_off_task_pauses_the_drift_count_and_resumes_it() {
+        let c = cfg(); // idle_after_secs = 180
+        let mut m = Machine::default();
+        let yt = app("com.google.Chrome", Some("youtube.com"));
+        run(&mut m, &c, &yt, 0, 20_000); // 20s off task
+        let gone = idle_app("com.google.Chrome", Some("youtube.com"), 200, false);
+        let a = run(&mut m, &c, &gone, 22_000, 600_000);
+        assert_eq!(opened(&a), 0, "no nudge while away");
+        assert_eq!(sum_secs(&a, false), 0, "no focused time while away");
+        assert!(sum_secs(&a, true) >= 9 * 60, "away time is logged per minute");
+        assert_eq!(m.drift_count(), 0);
+        // Back: the 20s from before still count, 10s more is enough.
+        let a = run(&mut m, &c, &yt, 602_000, 608_000);
+        assert_eq!(opened(&a), 0);
+        let a = run(&mut m, &c, &yt, 610_000, 610_000);
+        assert_eq!(opened(&a), 1, "counting resumed from the paused value");
+    }
+
+    #[test]
+    fn under_the_idle_threshold_is_not_away() {
+        let c = cfg();
+        let mut m = Machine::default();
+        let quiet = idle_app("com.google.Chrome", Some("youtube.com"), 179, false);
+        let a = run(&mut m, &c, &quiet, 0, 30_000);
+        assert_eq!(opened(&a), 1);
+    }
+
+    #[test]
+    fn a_video_in_front_is_still_drift_when_idle() {
+        let c = cfg();
+        let mut m = Machine::default();
+        let watching = idle_app("com.google.Chrome", Some("youtube.com"), 900, true);
+        let a = run(&mut m, &c, &watching, 0, 30_000);
+        assert_eq!(opened(&a), 1, "passive YouTube is drift");
+        assert_eq!(sum_secs(&a, true), 0);
+    }
+
+    #[test]
+    fn on_task_quiet_time_is_focused_up_to_fifteen_minutes() {
+        let c = cfg();
+        let mut m = Machine::default();
+        let reading = idle_app("com.microsoft.VSCode", None, 14 * 60, false);
+        let a = run(&mut m, &c, &reading, 0, 120_000);
+        assert_eq!(sum_secs(&a, false), 120, "waiting on an agent counts as focused");
+        assert_eq!(sum_secs(&a, true), 0);
+        let gone = idle_app("com.microsoft.VSCode", None, 15 * 60, false);
+        let a = run(&mut m, &c, &gone, 122_000, 242_000);
+        assert_eq!(sum_secs(&a, false), 0, "past 15 minutes it stops counting");
+        assert!(sum_secs(&a, true) >= 60);
+        let video_doesnt_matter = idle_app("com.microsoft.VSCode", None, 16 * 60, true);
+        let a = run(&mut m, &c, &video_doesnt_matter, 244_000, 364_000);
+        assert_eq!(sum_secs(&a, false), 0);
+    }
+
+    #[test]
+    fn the_workday_prompt_waits_while_away() {
+        let mut c = cfg();
+        c.has_task = false;
+        c.timer = TimerState::Idle;
+        c.workday.enabled = true;
+        let mut m = Machine::default();
+        let gone = idle_app("com.google.Chrome", Some("youtube.com"), 600, false);
+        let mut t = 0;
+        while t <= 30 * 60_000 {
+            assert_eq!(opened(&m.step(&c, mode_for(&c, true), Some(&gone), t)), 0);
+            t += 2000;
+        }
+        // Back at the desk: the 2-minute timer starts from where it paused (zero).
+        let here = app("com.google.Chrome", Some("youtube.com"));
+        let mut opened_at = None;
+        while opened_at.is_none() {
+            t += 2000;
+            if opened(&m.step(&c, mode_for(&c, true), Some(&here), t)) > 0 {
+                opened_at = Some(t);
+            }
+        }
+        assert_eq!(opened_at.unwrap() - 30 * 60_000, 120_000);
+    }
+
+    #[test]
+    fn walking_away_does_not_close_an_open_drift_nudge() {
+        let c = cfg();
+        let mut m = Machine::default();
+        run(&mut m, &c, &app("com.google.Chrome", Some("youtube.com")), 0, 30_000);
+        assert!(m.nudge().is_some());
+        let gone = idle_app("com.google.Chrome", Some("youtube.com"), 3600, false);
+        let a = run(&mut m, &c, &gone, 32_000, 900_000);
+        assert!(!a.contains(&Action::CloseNudge));
+        assert!(m.nudge().is_some());
+        assert_eq!(sum_secs(&a, true), 0, "the nudge freezes away time too");
+    }
+
+    #[test]
+    fn partial_away_time_is_flushed_when_the_guard_goes_idle() {
+        let c = cfg();
+        let mut m = Machine::default();
+        let gone = idle_app("com.google.Chrome", None, 600, false);
+        run(&mut m, &c, &gone, 0, 90_000);
+        let a = m.step(&c, Mode::Idle, None, 92_000);
+        assert_eq!(a, vec![Action::Away { task: "Fix the build".into(), secs: 30 }]);
     }
 
     #[test]

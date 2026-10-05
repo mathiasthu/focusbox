@@ -133,6 +133,7 @@ describe("buildGuardConfig", () => {
     expect(c.workday.days).toEqual([1, 2, 3, 4, 5, 6]);
     expect(c.graceSecs).toBe(30);
     expect(c.blur).toBe(true);
+    expect(c.idleAfterSecs).toBe(180);
   });
   it("treats a done or missing card as no task", () => {
     expect(buildGuardConfig(prefs, { text: "x", done: true }, "running", {}).hasTask).toBe(false);
@@ -146,6 +147,12 @@ describe("prefs", () => {
     expect(getGuardPrefs()).toEqual(DEFAULT_GUARD_PREFS);
     expect(DEFAULT_GUARD_PREFS.enabled).toBe(false);
   });
+  it("idle threshold: 1/2/3/5/10 minutes, default 3, anything else falls back", () => {
+    expect(DEFAULT_GUARD_PREFS.idleMins).toBe(3);
+    for (const m of [1, 2, 3, 5, 10]) expect(normalizePrefs({ idleMins: m }).idleMins).toBe(m);
+    for (const bad of [0, 4, 15, -1, "5", null]) expect(normalizePrefs({ idleMins: bad }).idleMins).toBe(3);
+  });
+
   it("round-trip through localStorage", () => {
     const p = { ...DEFAULT_GUARD_PREFS, enabled: true, graceSecs: 60, workday: { ...DEFAULT_GUARD_PREFS.workday, enabled: true, start: "09:30" } };
     storeGuardPrefs(p);
@@ -226,6 +233,20 @@ describe("aggregateStats", () => {
     const out = aggregateStats([e({ ts: at(3, 23, 59) }), e({ ts: at(4, 0, 1) })], at(6, 9));
     expect(out.map((d) => d.day)).toEqual(["2026-10-06", "2026-10-04", "2026-10-03"]);
     expect(out[0]).toMatchObject({ focusedMinutes: 0, drifts: 0, topDrift: [], switches: [], parked: [] });
+  });
+
+  it("sums away time into minutes, separately from focused time", () => {
+    const [today] = aggregateStats(
+      [
+        e({ kind: "away_secs", secs: 60 }),
+        e({ kind: "away_secs", secs: 60 }),
+        e({ kind: "away_secs", secs: 40 }),
+        e({ kind: "focused_secs", secs: 60 }),
+      ],
+      at(5, 18),
+    );
+    expect(today.awayMinutes).toBe(3); // 160s rounds to 3
+    expect(today.focusedMinutes).toBe(1);
   });
 
   it("sums focused time into minutes", () => {

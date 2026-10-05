@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import {
   getNudgeOpacity,
   GRACE_OPTIONS,
+  IDLE_OPTIONS,
   NUDGE_OPACITY_MAX,
   NUDGE_OPACITY_MIN,
   NUDGE_OPACITY_STEP,
@@ -230,6 +231,26 @@ export default function FocusGuardSettings({ prefs, onChange, onOpenStats, previ
               ))}
             </div>
           </div>
+
+          <div className="setting__row">
+            <span className="guard-settings__label">Idle after</span>
+            <div className="segmented" role="group" aria-label="Idle after">
+              {IDLE_OPTIONS.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={`segmented__opt${prefs.idleMins === m ? " segmented__opt--active" : ""}`}
+                  aria-pressed={prefs.idleMins === m}
+                  onClick={() => set({ idleMins: m })}
+                >
+                  {m}m
+                </button>
+              ))}
+            </div>
+          </div>
+          <span className="setting__hint">
+            No input for this long pauses the guard. Videos in the app in front still count.
+          </span>
 
           <div className="setting__row">
             <span className="guard-settings__label">Block new tasks completely</span>
