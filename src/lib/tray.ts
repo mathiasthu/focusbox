@@ -56,6 +56,18 @@ export function trayTitleFor(status: string, remainingMs: number): string | null
 let lastTitle = "";
 let trayHandle: unknown = null;
 
+// Focus guard pause/resume from the menu. App.tsx registers these when the guard is
+// supported; until then (or off-guard) the items do nothing. Deliberately not offered on
+// the nudge itself, so it can't become a way around the typed-reason rule.
+export interface TrayGuardHandlers {
+  pause: (minutes: number) => void;
+  resume: () => void;
+}
+let guardHandlers: TrayGuardHandlers | null = null;
+export function setTrayGuardHandlers(h: TrayGuardHandlers | null): void {
+  guardHandlers = h;
+}
+
 // React effects fire initTray/destroyTray without awaiting them (a Settings
 // toggle off→on runs both back-to-back), so serialize every tray operation —
 // otherwise a still-in-flight destroy can remove the tray a concurrent init
@@ -99,6 +111,13 @@ async function initTrayNow(): Promise<void> {
       items: [
         await MenuItem.new({ text: `Focusbox v${APP_VERSION}`, enabled: false }),
         await MenuItem.new({ text: "Show Focusbox", action: focusMainWindow }),
+        await PredefinedMenuItem.new({ item: "Separator" }),
+        ...(await Promise.all(
+          [15, 30, 60].map((m) =>
+            MenuItem.new({ text: `Pause focus guard ${m} min`, action: () => guardHandlers?.pause(m) }),
+          ),
+        )),
+        await MenuItem.new({ text: "Resume focus guard", action: () => guardHandlers?.resume() }),
         await PredefinedMenuItem.new({ item: "Separator" }),
         await MenuItem.new({
           text: "Quit",

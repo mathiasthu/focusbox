@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-guard-running-apps"
+description = "Enables the guard_running_apps command without any pre-configured scope."
+commands.allow = ["guard_running_apps"]
+
+[[permission]]
+identifier = "deny-guard-running-apps"
+description = "Denies the guard_running_apps command without any pre-configured scope."
+commands.deny = ["guard_running_apps"]

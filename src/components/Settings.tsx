@@ -9,6 +9,7 @@ import { playChime, SOUNDS, type SoundId } from "../lib/chime";
 import AccountSync from "./AccountSync";
 import FocusGuardSettings from "./FocusGuardSettings";
 import type { GuardPrefs } from "../lib/focusGuard";
+import type { GuardExtras } from "./FocusGuardSettings";
 import type { SyncController } from "../hooks/useSync";
 
 function isStripeUrl(url: string): boolean {
@@ -77,6 +78,7 @@ interface Props {
   onGuardPrefsChange: (next: GuardPrefs) => void;
   onOpenGuardStats: () => void;
   guardPreviewTask: string;
+  guardExtras: GuardExtras;
   sync: SyncController;
   demo: boolean;
 }
@@ -105,6 +107,7 @@ export default function Settings({
   onGuardPrefsChange,
   onOpenGuardStats,
   guardPreviewTask,
+  guardExtras,
   sync,
   demo,
 }: Props) {
@@ -304,6 +307,7 @@ export default function Settings({
             onChange={onGuardPrefsChange}
             onOpenStats={onOpenGuardStats}
             previewTask={guardPreviewTask}
+            extras={guardExtras}
           />
         )}
 

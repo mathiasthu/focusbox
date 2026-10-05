@@ -19,6 +19,7 @@ const COMMANDS: &[&str] = &[
     "guard_log_newtask",
     "guard_stats",
     "guard_preview_nudge",
+    "guard_running_apps",
     "todoist_status",
     "todoist_set_token",
     "todoist_clear_token",

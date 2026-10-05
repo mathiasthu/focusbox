@@ -20,6 +20,7 @@ macro_rules! app_commands {
             crate::focusguard::guard_log_newtask,
             crate::focusguard::guard_stats,
             crate::focusguard::guard_preview_nudge,
+            crate::focusguard::guard_running_apps,
             crate::todoist::todoist_status,
             crate::todoist::todoist_set_token,
             crate::todoist::todoist_clear_token,
@@ -194,6 +195,8 @@ mod acl_tests {
             let r = call(&main, cmd);
             assert!(r.is_err() && !denied(r.clone()), "main must reach {cmd}: {r:?}");
         }
+        // Read-only, no arguments: safe to actually run here.
+        assert!(call(&main, "guard_running_apps").is_ok());
         // The nudge-only commands are refused to main.
         assert!(denied(call(&main, "get_nudge_state")));
         assert!(denied(call(&main, "nudge_resolve")));
@@ -213,6 +216,7 @@ mod acl_tests {
             "guard_supported",
             "guard_log_newtask",
             "guard_preview_nudge",
+            "guard_running_apps",
         ] {
             assert!(denied(call(&nudge, cmd)), "nudge must not reach {cmd}");
         }
@@ -238,6 +242,7 @@ mod acl_tests {
             "park",
             "spotify_state",
             "spotify_control",
+            "guard_running_apps",
         ] {
             assert!(denied(call(&toast, cmd)), "toast must not reach {cmd}");
         }

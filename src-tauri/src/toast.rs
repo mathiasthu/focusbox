@@ -94,10 +94,15 @@ impl ToastState {
 }
 
 /// Show (or replace) the toast. Never focuses anything.
-pub fn show_toast<R: Runtime>(app: &AppHandle<R>, result: &str, text: &str) {
+///
+/// It goes on the monitor of the window labelled `anchor`, resolved now: the nudge is
+/// destroyed right after a park from it, so by the time the toast window is built it may
+/// be gone.
+pub fn show_toast<R: Runtime>(app: &AppHandle<R>, result: &str, text: &str, anchor: &str) {
     let state = app.state::<Arc<ToastState>>().inner().clone();
     let Some(payload) = state.show(result, text) else { return };
-    present(app, state.clone());
+    let monitor = app.get_webview_window(anchor).and_then(|w| w.current_monitor().ok().flatten());
+    present(app, state.clone(), monitor);
     // Expiry: the page fades itself out at duration_ms; the window goes a moment later,
     // unless a newer park replaced this one.
     let app2 = app.clone();
@@ -111,7 +116,7 @@ pub fn show_toast<R: Runtime>(app: &AppHandle<R>, result: &str, text: &str) {
     });
 }
 
-fn present<R: Runtime>(app: &AppHandle<R>, state: Arc<ToastState>) {
+fn present<R: Runtime>(app: &AppHandle<R>, state: Arc<ToastState>, monitor: Option<tauri::Monitor>) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         let app = handle;
@@ -127,7 +132,7 @@ fn present<R: Runtime>(app: &AppHandle<R>, state: Arc<ToastState>) {
                     std::thread::sleep(Duration::from_millis(100));
                     if later.get_webview_window(TOAST_LABEL).is_none() {
                         let state = later.state::<Arc<ToastState>>().inner().clone();
-                        present(&later, state);
+                        present(&later, state, monitor);
                         return;
                     }
                 }
@@ -135,15 +140,13 @@ fn present<R: Runtime>(app: &AppHandle<R>, state: Arc<ToastState>) {
             return;
         }
         state.take_closing();
-        build(&app);
+        build(&app, monitor);
     });
 }
 
-fn build<R: Runtime>(app: &AppHandle<R>) {
-    // The nudge's monitor if one is up, else the cursor's, else the primary.
-    let monitor = app
-        .get_webview_window(crate::focusguard::NUDGE_LABEL)
-        .and_then(|w| w.current_monitor().ok().flatten())
+fn build<R: Runtime>(app: &AppHandle<R>, anchor_monitor: Option<tauri::Monitor>) {
+    // The anchor window's monitor, else the cursor's, else the primary.
+    let monitor = anchor_monitor
         .or_else(|| {
             app.cursor_position()
                 .ok()

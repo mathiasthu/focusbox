@@ -41,7 +41,14 @@ import {
   normalizeSoundId,
   type SoundId,
 } from "./lib/chime";
-import { initTray, setTrayTitle, destroyTray, trayTitleFor, isTrayAvailable } from "./lib/tray";
+import {
+  initTray,
+  setTrayTitle,
+  destroyTray,
+  trayTitleFor,
+  isTrayAvailable,
+  setTrayGuardHandlers,
+} from "./lib/tray";
 import {
   getAutostartEnabled,
   setAutostartEnabled,
@@ -58,6 +65,12 @@ import {
   parkTask,
   pushGuardConfig,
   saveAllowOverrides,
+  getAlwaysAllow,
+  storeAlwaysAllow,
+  getPausedUntil,
+  storePausedUntil,
+  pauseUntil,
+  type AlwaysAllow,
   storeGuardPrefs,
   timerStateFromStatus,
   type AllowOverrides,
@@ -96,6 +109,9 @@ export default function App() {
   const [guardSupported, setGuardSupported] = useState(false);
   const [guardPrefs, setGuardPrefs] = useState<GuardPrefs>(getGuardPrefs);
   const [allowOverrides, setAllowOverrides] = useState<AllowOverrides>({});
+  // Apps/sites on task for every task, and "Pause guard". Device-local (localStorage).
+  const [alwaysAllow, setAlwaysAllow] = useState<AlwaysAllow>(getAlwaysAllow);
+  const [pausedUntil, setPausedUntil] = useState<number>(() => getPausedUntil());
   const [timerStatus, setTimerStatus] = useState("set timer");
   const [guardStatsOpen, setGuardStatsOpen] = useState(false);
   // A different line was asked to become the focus while the current one is unfinished.
@@ -247,8 +263,31 @@ export default function App() {
   useEffect(() => {
     if (!guardSupported || !loaded) return;
     const task = focusText === null ? null : { text: focusText, done: focusDone };
-    void pushGuardConfig(buildGuardConfig(guardPrefs, task, guardTimer, allowOverrides));
-  }, [guardSupported, loaded, guardPrefs, focusText, focusDone, guardTimer, allowOverrides]);
+    void pushGuardConfig(buildGuardConfig(guardPrefs, task, guardTimer, allowOverrides, alwaysAllow, pausedUntil));
+  }, [guardSupported, loaded, guardPrefs, focusText, focusDone, guardTimer, allowOverrides, alwaysAllow, pausedUntil]);
+
+  useEffect(() => {
+    storeAlwaysAllow(alwaysAllow);
+  }, [alwaysAllow]);
+
+  // Persist the pause (it survives a restart), and drop it when it runs out so Settings
+  // stops saying "Paused until". Rust resumes on its own clock either way.
+  useEffect(() => {
+    storePausedUntil(pausedUntil);
+    if (!pausedUntil) return;
+    const t = window.setTimeout(() => setPausedUntil(0), Math.max(0, pausedUntil - Date.now()) + 500);
+    return () => window.clearTimeout(t);
+  }, [pausedUntil]);
+
+  // The tray menu's "Pause focus guard" items (macOS menubar). Not on the nudge, ever.
+  useEffect(() => {
+    if (!guardSupported) return;
+    setTrayGuardHandlers({
+      pause: (minutes) => setPausedUntil(pauseUntil(Date.now(), minutes)),
+      resume: () => setPausedUntil(0),
+    });
+    return () => setTrayGuardHandlers(null);
+  }, [guardSupported]);
 
   // Events from the nudge window (via Rust). Handlers read the latest state through a ref,
   // since the listeners are registered once.
@@ -577,6 +616,18 @@ export default function App() {
         onGuardPrefsChange={setGuardPrefs}
         onOpenGuardStats={() => setGuardStatsOpen(true)}
         guardPreviewTask={focusTask && !focusTask.done ? focusTask.text : ""}
+        guardExtras={{
+          alwaysAllow,
+          onAlwaysAllowChange: setAlwaysAllow,
+          overrides: allowOverrides,
+          onOverridesChange: (next) => {
+            setAllowOverrides(next);
+            void saveAllowOverrides(next);
+          },
+          pausedUntil,
+          onPause: (minutes) => setPausedUntil(pauseUntil(Date.now(), minutes)),
+          onResume: () => setPausedUntil(0),
+        }}
         sync={sync}
         demo={demo}
       />
@@ -591,10 +642,13 @@ export default function App() {
           onPark={async () => {
             // A copy goes to Todoist; the line stays in the notes and the focus stays put.
             const result = await parkTask(newTaskPrompt.text);
-            if (result !== "rejected") void logNewTask("newtask_park", newTaskPrompt.text);
-            // Delivered or queued for a retry: done. Otherwise the prompt stays up to say
-            // why it hasn't reached Todoist (no key, or the key was rejected).
-            if (result === "sent" || result === "queued") setNewTaskPrompt(null);
+            // Every outcome except "rejected" is parked (sent or kept for later), and the
+            // top-of-screen toast says which, so the prompt just closes. A rejection keeps
+            // it open with the reason.
+            if (result !== "rejected") {
+              void logNewTask("newtask_park", newTaskPrompt.text);
+              setNewTaskPrompt(null);
+            }
             return result;
           }}
           onSwitch={(reason) => {

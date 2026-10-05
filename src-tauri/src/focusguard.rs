@@ -139,6 +139,9 @@ pub struct GuardConfig {
     pub blur: bool,
     /// No hardware input for this long (and no video in the app in front) = away.
     pub idle_after_secs: u64,
+    /// "Pause guard" from Settings or the tray: epoch ms. Until then the guard is idle (no
+    /// sampling, nudges or logging); it resumes by itself once this passes. 0 = not paused.
+    pub paused_until: u64,
 }
 
 impl Default for GuardConfig {
@@ -153,8 +156,9 @@ impl Default for GuardConfig {
             allow_domains: Vec::new(),
             grace_secs: 30,
             workday: Workday::default(),
-            blur: true,
+            blur: false,
             idle_after_secs: 180,
+            paused_until: 0,
         }
     }
 }
@@ -190,6 +194,23 @@ pub fn mode_for(cfg: &GuardConfig, in_window: bool) -> Mode {
         return Mode::NeedTask;
     }
     Mode::Idle
+}
+
+/// `mode_for`, with "Pause guard" applied: while `now_epoch_ms < paused_until` the guard is
+/// idle. Evaluated every tick, so it resumes by itself.
+pub fn effective_mode(cfg: &GuardConfig, in_window: bool, now_epoch_ms: u64) -> Mode {
+    if now_epoch_ms < cfg.paused_until {
+        Mode::Idle
+    } else {
+        mode_for(cfg, in_window)
+    }
+}
+
+/// A new pause starting (or an existing one being extended) with this config push.
+/// Returns its length in seconds from now, for the log.
+pub fn pause_started(old_until: u64, new_until: u64, now_epoch_ms: u64) -> Option<u64> {
+    (new_until > now_epoch_ms && new_until > old_until.max(now_epoch_ms))
+        .then(|| (new_until - now_epoch_ms) / 1000)
 }
 
 fn parse_hhmm(s: &str) -> Option<u32> {
@@ -296,6 +317,9 @@ pub struct FrontApp {
     /// The app in front holds a display-sleep assertion (a video playing). Only looked
     /// up once `idle_secs` reaches the idle threshold; false otherwise.
     pub video: bool,
+    /// Process id of the frontmost app (0 if unknown). Used to put the nudge on the
+    /// monitor of the window the user is actually working in.
+    pub pid: i32,
 }
 
 impl FrontApp {
@@ -310,6 +334,56 @@ pub enum Sample {
     /// Screen locked / screen saver / nothing frontmost: neither on nor off task.
     Away,
     Front(FrontApp),
+}
+
+/// A rectangle in macOS global display coordinates: points, origin at the top-left of the
+/// primary display, y growing down (what CGWindowBounds and CGDisplayBounds use).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rect {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+impl Rect {
+    fn overlap(&self, o: &Rect) -> f64 {
+        let w = (self.x + self.w).min(o.x + o.w) - self.x.max(o.x);
+        let h = (self.y + self.h).min(o.y + o.h) - self.y.max(o.y);
+        if w > 0.0 && h > 0.0 {
+            w * h
+        } else {
+            0.0
+        }
+    }
+}
+
+/// A Tauri monitor (physical position and size) as a Rect in global points. On macOS, tao
+/// derives the physical position as CGDisplayBounds.origin × the monitor's own scale
+/// factor, and the size as the display's point size × that scale, so dividing by the
+/// monitor's own scale recovers CG points even with mixed-DPI displays.
+pub fn monitor_points(pos: (i32, i32), size: (u32, u32), scale: f64) -> Rect {
+    let s = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+    Rect { x: pos.0 as f64 / s, y: pos.1 as f64 / s, w: size.0 as f64 / s, h: size.1 as f64 / s }
+}
+
+/// The monitor a window belongs to: the one containing its centre, else the one it
+/// overlaps most. None when it is on none of them (the caller falls back).
+pub fn pick_monitor(win: Rect, monitors: &[Rect]) -> Option<usize> {
+    let (cx, cy) = (win.x + win.w / 2.0, win.y + win.h / 2.0);
+    if let Some(i) = monitors
+        .iter()
+        .position(|m| cx >= m.x && cx < m.x + m.w && cy >= m.y && cy < m.y + m.h)
+    {
+        return Some(i);
+    }
+    monitors
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (i, win.overlap(m)))
+        .filter(|(_, a)| *a > 0.0)
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i)
 }
 
 /// Whether the user counts as away from this sample.
@@ -759,6 +833,84 @@ mod platform {
         o.downcast_ref::<NSNumber>().map(|n| n.intValue())
     }
 
+    fn float(o: &AnyObject) -> Option<f64> {
+        o.downcast_ref::<NSNumber>().map(|n| n.doubleValue())
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> *mut std::ffi::c_void;
+    }
+    const ON_SCREEN_ONLY: u32 = 1 << 0;
+    const EXCLUDE_DESKTOP_ELEMENTS: u32 = 1 << 4;
+    const NULL_WINDOW_ID: u32 = 0;
+
+    /// Running regular apps (the ones with a Dock icon), minus Focusbox, sorted by name.
+    pub fn running_apps() -> Vec<super::RunningApp> {
+        objc2::rc::autoreleasepool(|_| {
+            let me = std::process::id() as i32;
+            let apps = NSWorkspace::sharedWorkspace().runningApplications();
+            let mut out: Vec<super::RunningApp> = Vec::new();
+            for i in 0..apps.count() {
+                let a = apps.objectAtIndex(i);
+                if a.activationPolicy() != objc2_app_kit::NSApplicationActivationPolicy::Regular
+                    || a.processIdentifier() == me
+                {
+                    continue;
+                }
+                let Some(bundle_id) = a.bundleIdentifier().map(|s| s.to_string()) else { continue };
+                if out.iter().any(|r| r.bundle_id == bundle_id) {
+                    continue;
+                }
+                let name = a.localizedName().map(|s| s.to_string()).unwrap_or_else(|| bundle_id.clone());
+                out.push(super::RunningApp { bundle_id, name });
+            }
+            out.sort_by_key(|r| r.name.to_lowercase());
+            out
+        })
+    }
+
+    /// Bounds (global points) of `pid`'s frontmost normal window. The window list comes
+    /// back front-to-back; the first layer-0 window of that pid with a real size wins.
+    /// Only owner pid, layer and bounds are read, none of which need Screen Recording
+    /// permission (window names would, and are never touched).
+    pub fn front_window_rect(pid: i32) -> Option<super::Rect> {
+        if pid <= 0 {
+            return None;
+        }
+        objc2::rc::autoreleasepool(|_| {
+            let raw = unsafe { CGWindowListCopyWindowInfo(ON_SCREEN_ONLY | EXCLUDE_DESKTOP_ELEMENTS, NULL_WINDOW_ID) };
+            if raw.is_null() {
+                return None;
+            }
+            // CFArray is toll-free bridged to NSArray; "Copy" = owned, released on drop.
+            let list = unsafe { Retained::from_raw(raw.cast::<NSArray>()) }?;
+            let s = objc2_foundation::NSString::from_str;
+            let (k_pid, k_layer, k_bounds) = (s("kCGWindowOwnerPID"), s("kCGWindowLayer"), s("kCGWindowBounds"));
+            let (k_x, k_y, k_w, k_h) = (s("X"), s("Y"), s("Width"), s("Height"));
+            for i in 0..list.count() {
+                let item = list.objectAtIndex(i);
+                let Some(win) = item.downcast_ref::<NSDictionary>() else { continue };
+                if win.objectForKey(&k_pid).and_then(|o| number(&o)) != Some(pid) {
+                    continue;
+                }
+                if win.objectForKey(&k_layer).and_then(|o| number(&o)) != Some(0) {
+                    continue;
+                }
+                let Some(b) = win.objectForKey(&k_bounds) else { continue };
+                let Some(b) = b.downcast_ref::<NSDictionary>() else { continue };
+                let get = |k| b.objectForKey(k).and_then(|o| float(&o));
+                let (Some(x), Some(y), Some(w), Some(h)) = (get(&k_x), get(&k_y), get(&k_w), get(&k_h)) else {
+                    continue;
+                };
+                if w >= 50.0 && h >= 50.0 {
+                    return Some(super::Rect { x, y, w, h });
+                }
+            }
+            None
+        })
+    }
+
     /// Whether the frontmost app holds a display-sleep assertion (video playing).
     ///
     /// The assertion counts as the front app's when it is held by the front app's pid,
@@ -901,7 +1053,7 @@ mod platform {
             let bundle_path = app.bundleURL().and_then(|u| u.path()).map(|p| p.to_string());
             video_in_front(pid, bundle_path.as_deref())
         };
-        Sample::Front(FrontApp { bundle_id, name, domain, is_self, idle_secs, video })
+        Sample::Front(FrontApp { bundle_id, name, domain, is_self, idle_secs, video, pid })
     }
 
     /// Bring a running app forward. False if it isn't running.
@@ -962,6 +1114,12 @@ mod platform {
         false
     }
     pub fn activate_self() {}
+    pub fn front_window_rect(_pid: i32) -> Option<super::Rect> {
+        None
+    }
+    pub fn running_apps() -> Vec<super::RunningApp> {
+        Vec::new()
+    }
     /// # Safety
     /// No-op off macOS.
     pub unsafe fn raise_window(_ns_window: *mut std::ffi::c_void) {}
@@ -1005,6 +1163,21 @@ struct Inner {
     /// Whether the nudge window currently on screen was built with the blur effect, so a
     /// mismatch can be rebuilt (macOS can't remove a vibrancy view from a live window).
     window_blur: Option<bool>,
+    /// The app the user was in when the current nudge (or preview) was raised; the nudge
+    /// goes on the monitor holding that app's front window.
+    target_pid: Option<i32>,
+    /// Whether the main window has pushed a config yet this run. The first push restores
+    /// state (e.g. a pause that was already running before a restart), so it doesn't log.
+    config_seen: bool,
+}
+
+/// What a config push changed, for the caller to act on outside the lock.
+#[derive(Debug, PartialEq, Eq)]
+struct Applied {
+    /// A pause started (or was extended) with this push: its length in seconds.
+    pause_started: Option<u64>,
+    /// Pausing closed an open nudge.
+    closed_nudge: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1014,6 +1187,60 @@ struct Preview {
 }
 
 impl Inner {
+    /// "Allow" from the nudge: on task for this task from now on, even before the main
+    /// window's config push (which persists it) arrives.
+    fn allow_for_task(&mut self, task_key: &str, app: Option<&str>, domain: Option<&str>) {
+        let entry = self.session_allow.entry(task_key.to_string()).or_default();
+        if let Some(a) = app {
+            entry.0.insert(a.to_string());
+        }
+        if let Some(d) = domain {
+            entry.1.insert(d.to_string());
+        }
+    }
+
+    /// Take a config push from the main window.
+    ///
+    /// Session allowances the push already carries are dropped here: from then on the
+    /// main window's list is the truth, so removing one in Settings really removes it.
+    /// Until the push arrives they still bridge the gap (an "Allow" can't be lost to a
+    /// push that raced the event persisting it).
+    fn apply_config(&mut self, config: GuardConfig, now: u64) -> Applied {
+        // A pause is capped at a day: a bad clock or a crafted value can't switch it off
+        // for good.
+        let paused_until = config.paused_until.min(now + 24 * 60 * 60 * 1000);
+        let first = !self.config_seen;
+        self.config_seen = true;
+        let pause_started = if first {
+            None
+        } else {
+            pause_started(self.cfg.paused_until, paused_until, now)
+        };
+        // Pausing answers an open nudge (no reason needed). Pausing is only offered in
+        // Settings and the tray, never on the nudge itself.
+        let closed_nudge = pause_started.is_some() && self.machine.nudge().is_some();
+        if closed_nudge {
+            self.machine.resolve();
+        }
+        let cfg = GuardConfig {
+            task_text: clip(&config.task_text),
+            task_key: clip(&config.task_key),
+            grace_secs: config.grace_secs.clamp(5, 3600),
+            idle_after_secs: config.idle_after_secs.clamp(60, 3600),
+            paused_until,
+            ..config
+        };
+        if let Some((apps, domains)) = self.session_allow.get_mut(&cfg.task_key) {
+            apps.retain(|a| !cfg.allow_apps.iter().any(|x| x.trim().eq_ignore_ascii_case(a)));
+            domains.retain(|d| !cfg.allow_domains.iter().any(|x| x.trim().eq_ignore_ascii_case(d)));
+            if apps.is_empty() && domains.is_empty() {
+                self.session_allow.remove(&cfg.task_key);
+            }
+        }
+        self.cfg = cfg;
+        Applied { pause_started, closed_nudge }
+    }
+
     fn effective_cfg(&self) -> GuardConfig {
         let mut cfg = self.cfg.clone();
         if let Some((apps, domains)) = self.session_allow.get(&cfg.task_key) {
@@ -1092,6 +1319,8 @@ impl GuardState {
             return false;
         }
         let task = clip(task);
+        // From Settings: Focusbox's own window is the one in front.
+        inner.target_pid = Some(std::process::id() as i32);
         inner.preview = Some(Preview {
             payload: NudgePayload {
                 kind: "preview".into(),
@@ -1156,7 +1385,7 @@ fn watch<R: Runtime>(app: AppHandle<R>, state: Arc<GuardState>) {
         let (cfg, mode) = {
             let Ok(inner) = state.inner.lock() else { return };
             let cfg = inner.effective_cfg();
-            let mode = mode_for(&cfg, in_workday(&cfg.workday, Utc::now()));
+            let mode = effective_mode(&cfg, in_workday(&cfg.workday, Utc::now()), now_epoch_ms());
             (cfg, mode)
         };
         // Sample outside the lock: the browser read can take up to 1.5s.
@@ -1181,6 +1410,16 @@ fn watch<R: Runtime>(app: AppHandle<R>, state: Arc<GuardState>) {
                 Action::OpenNudge(kind) => {
                     // A real nudge replaces any preview on screen (same window, refreshed).
                     state.end_preview();
+                    // The app in front when it fired (the drifted-to app, or for the
+                    // workday prompt whatever the user is in), never Focusbox's guess.
+                    let pid = match (&kind, &sample) {
+                        (NudgeKind::Drift { app: off, .. }, _) if off.pid > 0 => Some(off.pid),
+                        (_, Some(Sample::Front(a))) if a.pid > 0 => Some(a.pid),
+                        _ => None,
+                    };
+                    if let Ok(mut i) = state.inner.lock() {
+                        i.target_pid = pid;
+                    }
                     if let NudgeKind::Drift { app: off, .. } = &kind {
                         state.log_kind("drift", &cfg.task_text, Some(off), None);
                     }
@@ -1245,6 +1484,14 @@ fn open_nudge_window<R: Runtime>(app: &AppHandle<R>) {
                 return;
             }
             let _ = w.emit_to(NUDGE_LABEL, "guard://nudge-refresh", ());
+            // A reused window (e.g. a preview turning into a real nudge) moves to the
+            // right monitor too.
+            let pid = state.inner.lock().ok().and_then(|i| i.target_pid);
+            if let Some(m) = target_monitor(&app, pid) {
+                let scale = m.scale_factor();
+                let _ = w.set_position(m.position().to_logical::<f64>(scale));
+                let _ = w.set_size(m.size().to_logical::<f64>(scale));
+            }
             let _ = w.show();
             if let Ok(ns) = w.ns_window_ptr() {
                 unsafe { platform::raise_window(ns) };
@@ -1253,11 +1500,8 @@ fn open_nudge_window<R: Runtime>(app: &AppHandle<R>) {
             let _ = w.set_focus();
             return;
         }
-        let monitor = app
-            .cursor_position()
-            .ok()
-            .and_then(|p| app.monitor_from_point(p.x, p.y).ok().flatten())
-            .or_else(|| app.primary_monitor().ok().flatten());
+        let pid = state.inner.lock().ok().and_then(|i| i.target_pid);
+        let monitor = target_monitor(&app, pid);
         let mut builder = tauri::WebviewWindowBuilder::new(
             &app,
             NUDGE_LABEL,
@@ -1312,6 +1556,27 @@ fn open_nudge_window<R: Runtime>(app: &AppHandle<R>) {
             Err(e) => eprintln!("Focusbox: could not open the focus nudge: {e}"),
         }
     });
+}
+
+/// Where the nudge goes: the monitor holding `pid`'s front window (macOS), else the
+/// cursor's monitor, else the primary. Typing in one screen while the pointer rests on the
+/// other is common, so the cursor is only a fallback.
+fn target_monitor<R: Runtime>(app: &AppHandle<R>, pid: Option<i32>) -> Option<tauri::Monitor> {
+    if let Some(rect) = pid.and_then(platform::front_window_rect) {
+        if let Ok(monitors) = app.available_monitors() {
+            let rects: Vec<Rect> = monitors
+                .iter()
+                .map(|m| monitor_points((m.position().x, m.position().y), (m.size().width, m.size().height), m.scale_factor()))
+                .collect();
+            if let Some(i) = pick_monitor(rect, &rects) {
+                return monitors.into_iter().nth(i);
+            }
+        }
+    }
+    app.cursor_position()
+        .ok()
+        .and_then(|p| app.monitor_from_point(p.x, p.y).ok().flatten())
+        .or_else(|| app.primary_monitor().ok().flatten())
 }
 
 fn close_nudge_window<R: Runtime>(app: &AppHandle<R>) {
@@ -1370,16 +1635,49 @@ pub fn guard_supported() -> bool {
 }
 
 #[tauri::command]
-pub fn guard_set_config(state: State<'_, Arc<GuardState>>, config: GuardConfig) -> Result<(), String> {
-    let mut inner = state.inner.lock().map_err(|_| "guard state poisoned".to_string())?;
-    inner.cfg = GuardConfig {
-        task_text: clip(&config.task_text),
-        task_key: clip(&config.task_key),
-        grace_secs: config.grace_secs.clamp(5, 3600),
-        idle_after_secs: config.idle_after_secs.clamp(60, 3600),
-        ..config
+pub fn guard_set_config<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, Arc<GuardState>>,
+    config: GuardConfig,
+) -> Result<(), String> {
+    let now = now_epoch_ms();
+    let (applied, task) = {
+        let mut inner = state.inner.lock().map_err(|_| "guard state poisoned".to_string())?;
+        let applied = inner.apply_config(config, now);
+        (applied, inner.cfg.task_text.clone())
     };
+    let (started, closed_nudge) = (applied.pause_started, applied.closed_nudge);
+    if let Some(secs) = started {
+        state.log(LogEntry {
+            ts: now,
+            kind: "pause".into(),
+            task: task.clone(),
+            app: None,
+            domain: None,
+            reason: None,
+            text: closed_nudge.then(|| "closed an open nudge".to_string()),
+            // Whole minutes, as chosen.
+            secs: Some((secs + 30) / 60 * 60),
+        });
+    }
+    if closed_nudge {
+        close_nudge_window(&app);
+    }
     Ok(())
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RunningApp {
+    pub bundle_id: String,
+    pub name: String,
+}
+
+/// Regular (Dock) apps running now, for Settings' "Add app" picker. Read-only; macOS only
+/// (empty elsewhere). Async so it never runs on the main thread.
+#[tauri::command]
+pub async fn guard_running_apps() -> Result<Vec<RunningApp>, String> {
+    Ok(platform::running_apps())
 }
 
 /// Settings → "Preview nudge": show the real nudge window with a demo payload, using the
@@ -1470,7 +1768,8 @@ pub async fn nudge_resolve<R: Runtime>(
         }
         (NudgeKind::Drift { app: off, .. }, "park") => {
             let what = text.map(|t| clip(&t)).filter(|t| !t.is_empty()).unwrap_or_else(|| off.label());
-            result = crate::todoist::park_and_confirm(&app, &what).await?;
+            // Toast on the nudge's monitor (the nudge is still up at this point).
+            result = crate::todoist::park_and_confirm(&app, &what, NUDGE_LABEL).await?;
             state.log(LogEntry {
                 ts: now_epoch_ms(),
                 kind: "park".into(),
@@ -1500,13 +1799,7 @@ pub async fn nudge_resolve<R: Runtime>(
             }
             {
                 let mut inner = state.inner.lock().map_err(|_| "guard state poisoned".to_string())?;
-                let entry = inner.session_allow.entry(task_key.clone()).or_default();
-                if let Some(a) = &allow_app {
-                    entry.0.insert(a.clone());
-                }
-                if let Some(d) = &allow_domain {
-                    entry.1.insert(d.clone());
-                }
+                inner.allow_for_task(&task_key, allow_app.as_deref(), allow_domain.as_deref());
             }
             state.log_kind("allow", &task, Some(off), reason.as_deref());
             let _ = app.emit_to(
@@ -1591,6 +1884,7 @@ mod tests {
             workday: Workday::default(),
             blur: true,
             idle_after_secs: 180,
+            paused_until: 0,
         }
     }
 
@@ -2126,6 +2420,176 @@ mod tests {
         run(&mut m, &c, &gone, 0, 90_000);
         let a = m.step(&c, Mode::Idle, None, 92_000);
         assert_eq!(a, vec![Action::Away { task: "Fix the build".into(), secs: 30 }]);
+    }
+
+    // --- monitor choice ---
+
+    /// A physical-pixel monitor as tao reports it on macOS: CG origin and point size,
+    /// each multiplied by the monitor's own scale.
+    fn mon(x_pt: f64, y_pt: f64, w_pt: f64, h_pt: f64, scale: f64) -> Rect {
+        monitor_points(
+            ((x_pt * scale) as i32, (y_pt * scale) as i32),
+            ((w_pt * scale) as u32, (h_pt * scale) as u32),
+            scale,
+        )
+    }
+
+    fn win(x: f64, y: f64, w: f64, h: f64) -> Rect {
+        Rect { x, y, w, h }
+    }
+
+    #[test]
+    fn monitor_points_undoes_each_monitors_own_scale() {
+        assert_eq!(monitor_points((2880, 0), (3840, 2160), 2.0), win(1440.0, 0.0, 1920.0, 1080.0));
+        assert_eq!(monitor_points((-1920, 0), (1920, 1080), 1.0), win(-1920.0, 0.0, 1920.0, 1080.0));
+        assert_eq!(monitor_points((10, 10), (100, 100), 0.0), win(10.0, 10.0, 100.0, 100.0), "bad scale = 1");
+    }
+
+    #[test]
+    fn picks_the_monitor_holding_the_window_centre() {
+        // Retina laptop as primary (scale 2), a 1x display to its right.
+        let mons = [mon(0.0, 0.0, 1512.0, 982.0, 2.0), mon(1512.0, 0.0, 2560.0, 1440.0, 1.0)];
+        assert_eq!(pick_monitor(win(100.0, 50.0, 800.0, 600.0), &mons), Some(0));
+        assert_eq!(pick_monitor(win(1800.0, 200.0, 1200.0, 900.0), &mons), Some(1));
+        // Straddling the edge: the centre decides.
+        assert_eq!(pick_monitor(win(1200.0, 100.0, 800.0, 600.0), &mons), Some(1));
+    }
+
+    #[test]
+    fn secondary_left_of_and_above_the_primary_use_negative_coordinates() {
+        // Primary 1x at the origin, a retina display to the LEFT, another display ABOVE.
+        let mons = [
+            mon(0.0, 0.0, 1920.0, 1080.0, 1.0),
+            mon(-1728.0, 0.0, 1728.0, 1117.0, 2.0),
+            mon(0.0, -1440.0, 2560.0, 1440.0, 1.0),
+        ];
+        assert_eq!(pick_monitor(win(-1500.0, 100.0, 900.0, 700.0), &mons), Some(1));
+        assert_eq!(pick_monitor(win(400.0, -1200.0, 1000.0, 800.0), &mons), Some(2));
+        assert_eq!(pick_monitor(win(300.0, 200.0, 900.0, 600.0), &mons), Some(0));
+    }
+
+    #[test]
+    fn falls_back_to_largest_overlap_then_none() {
+        let mons = [mon(0.0, 0.0, 1000.0, 800.0, 1.0), mon(1000.0, 0.0, 1000.0, 800.0, 2.0)];
+        // Centre is below both screens; more of it is on the right one.
+        assert_eq!(pick_monitor(win(700.0, 700.0, 1000.0, 400.0), &mons), Some(1));
+        // Entirely off-screen.
+        assert_eq!(pick_monitor(win(5000.0, 5000.0, 100.0, 100.0), &mons), None);
+        assert_eq!(pick_monitor(win(0.0, 0.0, 10.0, 10.0), &[]), None);
+    }
+
+    // --- pause ---
+
+    #[test]
+    fn a_pause_suppresses_drift_and_resumes_by_itself() {
+        let mut c = cfg();
+        c.paused_until = 1_000_000; // epoch ms
+        let epoch = 900_000; // "now" when the loop starts: paused for another 100s
+        let mut m = Machine::default();
+        let yt = app("com.google.Chrome", Some("youtube.com"));
+        let mut opened_at = None;
+        let mut logged = 0;
+        let mut t = 0;
+        while t <= 200_000 && opened_at.is_none() {
+            let mode = effective_mode(&c, false, epoch + t);
+            let a = m.step(&c, mode, if mode == Mode::Idle { None } else { Some(&yt) }, t);
+            logged += a.iter().filter(|x| matches!(x, Action::Focused { .. } | Action::Away { .. })).count();
+            if opened(&a) > 0 {
+                opened_at = Some(t);
+            }
+            t += 2000;
+        }
+        assert_eq!(logged, 0, "nothing is counted while paused");
+        let at = opened_at.expect("the guard came back on its own");
+        // The pause ends at t=100s; the grace period (30s, the first sample counting its
+        // 2s step) runs from there.
+        assert!(at >= 100_000 + 28_000, "no drift during the pause ({at})");
+        assert!(at <= 100_000 + 32_000, "it resumed by itself ({at})");
+    }
+
+    #[test]
+    fn removing_an_allow_from_the_nudge_in_settings_takes_effect() {
+        let mut inner = Inner::default();
+        let base = cfg(); // allows VS Code + github.com only
+        inner.apply_config(base.clone(), 0);
+        let Sample::Front(slack) = app("com.tinyspeck.slackmacgap", None) else { unreachable!() };
+        assert!(!is_on_task(&inner.effective_cfg(), &slack));
+
+        // "Allow Slack for this task" on the nudge: on task immediately.
+        inner.allow_for_task(&base.task_key, Some("com.tinyspeck.slackmacgap"), None);
+        assert!(is_on_task(&inner.effective_cfg(), &slack));
+
+        // A push that raced the allow (doesn't carry it yet) must not lose it.
+        inner.apply_config(base.clone(), 0);
+        assert!(is_on_task(&inner.effective_cfg(), &slack));
+
+        // The main window persisted it and pushes it (bundle id case differs: still a match).
+        let mut with = base.clone();
+        with.allow_apps.push("COM.TINYSPECK.SLACKMACGAP".into());
+        inner.apply_config(with, 0);
+        assert!(is_on_task(&inner.effective_cfg(), &slack));
+        assert!(!inner.session_allow.contains_key(&base.task_key), "handed over to the main window's list");
+
+        // Removed in Settings: the next push no longer carries it, and it's gone.
+        inner.apply_config(base.clone(), 0);
+        assert!(!is_on_task(&inner.effective_cfg(), &slack));
+    }
+
+    #[test]
+    fn a_pause_restored_at_launch_is_not_logged_again() {
+        let now = 1_000_000;
+        let mut inner = Inner::default();
+        let mut c = cfg();
+        c.paused_until = now + 10 * 60_000;
+        // First push of the run: restoring a pause that started before the restart.
+        let first = inner.apply_config(c.clone(), now);
+        assert_eq!(first.pause_started, None);
+        assert_eq!(effective_mode(&inner.cfg, false, now), Mode::Idle, "but it is honoured");
+        // The same pause pushed again: nothing new.
+        assert_eq!(inner.apply_config(c.clone(), now + 1000).pause_started, None);
+        // Resume, then a real new pause: logged.
+        c.paused_until = 0;
+        inner.apply_config(c.clone(), now + 2000);
+        c.paused_until = now + 2000 + 15 * 60_000;
+        assert_eq!(inner.apply_config(c, now + 2000).pause_started, Some(900));
+    }
+
+    #[test]
+    fn pausing_closes_an_open_nudge_but_the_first_push_never_does() {
+        let mut inner = Inner::default();
+        let c = cfg();
+        inner.apply_config(c.clone(), 0);
+        run(&mut inner.machine, &c, &app("com.google.Chrome", Some("youtube.com")), 0, 30_000);
+        assert!(inner.machine.nudge().is_some());
+        let mut p = c.clone();
+        p.paused_until = 1_000_000;
+        let applied = inner.apply_config(p, 1000);
+        assert!(applied.closed_nudge);
+        assert!(inner.machine.nudge().is_none());
+    }
+
+    #[test]
+    fn effective_mode_is_idle_only_until_the_pause_ends() {
+        let mut c = cfg();
+        c.paused_until = 5_000;
+        assert_eq!(effective_mode(&c, false, 4_999), Mode::Idle);
+        assert_eq!(effective_mode(&c, false, 5_000), Mode::Guard);
+        c.paused_until = 0;
+        assert_eq!(effective_mode(&c, false, 1), Mode::Guard);
+        c.workday.enabled = true;
+        c.has_task = false;
+        c.paused_until = 10;
+        assert_eq!(effective_mode(&c, true, 5), Mode::Idle, "the workday prompt pauses too");
+    }
+
+    #[test]
+    fn pause_start_detection() {
+        assert_eq!(pause_started(0, 61_000, 1_000), Some(60), "new pause");
+        assert_eq!(pause_started(61_000, 61_000, 2_000), None, "same pause pushed again");
+        assert_eq!(pause_started(61_000, 121_000, 2_000), Some(119), "extended");
+        assert_eq!(pause_started(61_000, 0, 2_000), None, "resume");
+        assert_eq!(pause_started(0, 500, 1_000), None, "already over");
+        assert_eq!(pause_started(500, 61_000, 1_000), Some(60), "an expired pause doesn't count");
     }
 
     #[test]

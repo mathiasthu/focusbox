@@ -474,11 +474,12 @@ pub async fn park_text<R: Runtime>(app: &AppHandle<R>, text: &str) -> Result<Str
     .into())
 }
 
-/// Park, then show the top-of-screen confirmation for whatever happened. Both park paths
-/// (the nudge and the main window's `park` command) go through here.
-pub async fn park_and_confirm<R: Runtime>(app: &AppHandle<R>, text: &str) -> Result<String, String> {
+/// Park, then show the top-of-screen confirmation for whatever happened, on the monitor of
+/// the window labelled `anchor` (the nudge, or the main window for its own park). Both
+/// park paths go through here.
+pub async fn park_and_confirm<R: Runtime>(app: &AppHandle<R>, text: &str, anchor: &str) -> Result<String, String> {
     let result = park_text(app, text).await?;
-    crate::toast::show_toast(app, &result, &clip(text));
+    crate::toast::show_toast(app, &result, &clip(text), anchor);
     Ok(result)
 }
 
@@ -545,7 +546,7 @@ pub async fn todoist_clear_token(td: State<'_, Arc<Todoist>>) -> Result<(), Stri
 /// Park a task from the main window (the "new task while one is active" prompt).
 #[tauri::command]
 pub async fn park<R: Runtime>(app: AppHandle<R>, text: String) -> Result<String, String> {
-    park_and_confirm(&app, &text).await
+    park_and_confirm(&app, &text, "main").await
 }
 
 #[cfg(test)]

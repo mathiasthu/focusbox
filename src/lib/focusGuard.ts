@@ -102,6 +102,212 @@ export function addOverride(
   return { ...overrides, [taskKey]: { apps, domains } };
 }
 
+/** Take one app and/or domain out of a task's overrides. The task's entry goes once it is
+ * empty. Same object back when nothing changed. */
+export function removeOverride(
+  overrides: AllowOverrides,
+  taskKey: string,
+  remove: { app?: string; domain?: string },
+): AllowOverrides {
+  const cur = overrides[taskKey];
+  if (!cur) return overrides;
+  const apps = remove.app ? cur.apps.filter((a) => a !== remove.app) : cur.apps;
+  const domains = remove.domain ? cur.domains.filter((d) => d !== remove.domain) : cur.domains;
+  if (apps.length === cur.apps.length && domains.length === cur.domains.length) return overrides;
+  const next = { ...overrides };
+  if (apps.length === 0 && domains.length === 0) delete next[taskKey];
+  else next[taskKey] = { apps, domains };
+  return next;
+}
+
+/** Readable names for bundle ids the app knows about (chips in Settings). */
+const APP_NAMES: Record<string, string> = {
+  "com.microsoft.VSCode": "VS Code",
+  "com.apple.Terminal": "Terminal",
+  "com.googlecode.iterm2": "iTerm",
+  "com.anthropic.claudefordesktop": "Claude",
+  "notion.id": "Notion",
+  "com.todoist.mac.Todoist": "Todoist",
+  "com.google.Chrome": "Google Chrome",
+  "com.apple.Safari": "Safari",
+  "company.thebrowser.Browser": "Arc",
+};
+
+export function appDisplayName(bundleId: string, known: { bundleId: string; name: string }[] = []): string {
+  return known.find((a) => a.bundleId === bundleId)?.name ?? APP_NAMES[bundleId] ?? bundleId;
+}
+
+/** A user-typed site → a bare hostname to match as a suffix ("github.com" also covers
+ * "gist.github.com"). Scheme, userinfo, port, path, query, "*." and "www." are stripped
+ * first (same rules as the Rust side); what's left must be a plain dotted hostname, or
+ * this returns null. */
+export function normalizeHostname(raw: string): string | null {
+  let s = raw.trim().toLowerCase();
+  const scheme = s.indexOf("://");
+  if (scheme >= 0) s = s.slice(scheme + 3);
+  const cut = s.search(/[/?#]/);
+  if (cut >= 0) s = s.slice(0, cut);
+  const at = s.lastIndexOf("@");
+  if (at >= 0) s = s.slice(at + 1);
+  const colon = s.indexOf(":");
+  if (colon >= 0) s = s.slice(0, colon);
+  s = s.replace(/^\*\./, "").replace(/^www\./, "").replace(/^\.+|\.+$/g, "");
+  if (s.length > 253) return null;
+  return /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(s) && /\.[a-z]{2,}$|\.xn--[a-z0-9-]+$/.test(s)
+    ? s
+    : null;
+}
+
+// ---------------------------------------------------------------------------------------
+// "Always allowed": apps and sites that are on task for every task (device-local)
+// ---------------------------------------------------------------------------------------
+
+export interface AllowedApp {
+  bundleId: string;
+  name: string;
+}
+
+export interface AlwaysAllow {
+  apps: AllowedApp[];
+  domains: string[];
+}
+
+/** Seeded the first time, then entirely the user's to edit. */
+export const DEFAULT_ALWAYS_ALLOW: AlwaysAllow = {
+  apps: [
+    { bundleId: "com.anthropic.claudefordesktop", name: "Claude" },
+    { bundleId: "com.apple.Terminal", name: "Terminal" },
+    { bundleId: "com.googlecode.iterm2", name: "iTerm" },
+    { bundleId: "com.microsoft.VSCode", name: "VS Code" },
+  ],
+  domains: ["claude.ai"],
+};
+
+const ALWAYS_KEY = "focusbox-guard-always-allow";
+
+export function parseAlwaysAllow(raw: unknown): AlwaysAllow {
+  const out: AlwaysAllow = { apps: [], domains: [] };
+  if (!raw || typeof raw !== "object") return out;
+  const r = raw as { apps?: unknown; domains?: unknown };
+  if (Array.isArray(r.apps)) {
+    for (const a of r.apps) {
+      if (!a || typeof a !== "object") continue;
+      const { bundleId, name } = a as { bundleId?: unknown; name?: unknown };
+      if (typeof bundleId !== "string" || !bundleId.trim()) continue;
+      if (out.apps.some((x) => x.bundleId === bundleId)) continue;
+      out.apps.push({ bundleId, name: typeof name === "string" && name.trim() ? name : appDisplayName(bundleId) });
+    }
+  }
+  if (Array.isArray(r.domains)) {
+    for (const d of r.domains) {
+      const h = typeof d === "string" ? normalizeHostname(d) : null;
+      if (h && !out.domains.includes(h)) out.domains.push(h);
+    }
+  }
+  return out;
+}
+
+export function getAlwaysAllow(): AlwaysAllow {
+  const seed = () => ({ apps: [...DEFAULT_ALWAYS_ALLOW.apps], domains: [...DEFAULT_ALWAYS_ALLOW.domains] });
+  if (isDemo()) return seed();
+  try {
+    const raw = localStorage.getItem(ALWAYS_KEY);
+    if (raw === null) {
+      const seeded = seed();
+      storeAlwaysAllow(seeded);
+      return seeded;
+    }
+    return parseAlwaysAllow(JSON.parse(raw));
+  } catch {
+    return seed();
+  }
+}
+
+export function storeAlwaysAllow(a: AlwaysAllow): void {
+  if (isDemo()) return;
+  try {
+    localStorage.setItem(ALWAYS_KEY, JSON.stringify(a));
+  } catch {
+    /* not persisted */
+  }
+}
+
+export function addAlwaysApp(a: AlwaysAllow, app: AllowedApp): AlwaysAllow {
+  if (!app.bundleId || a.apps.some((x) => x.bundleId === app.bundleId)) return a;
+  return { ...a, apps: [...a.apps, app] };
+}
+
+export function removeAlwaysApp(a: AlwaysAllow, bundleId: string): AlwaysAllow {
+  return { ...a, apps: a.apps.filter((x) => x.bundleId !== bundleId) };
+}
+
+/** Add a typed site. `error` says why nothing was added. */
+export function addAlwaysDomain(a: AlwaysAllow, raw: string): { next: AlwaysAllow; error?: string } {
+  const h = normalizeHostname(raw);
+  if (!h) return { next: a, error: "That doesn't look like a site name (e.g. github.com)." };
+  if (a.domains.includes(h)) return { next: a, error: `${h} is already allowed.` };
+  return { next: { ...a, domains: [...a.domains, h] } };
+}
+
+export function removeAlwaysDomain(a: AlwaysAllow, domain: string): AlwaysAllow {
+  return { ...a, domains: a.domains.filter((d) => d !== domain) };
+}
+
+/** Everything that is on task for `taskText`: keyword defaults, that task's overrides and
+ * the always-allowed list, without duplicates. Empty when there is no task. */
+export function mergedAllow(taskText: string, overrides: AllowOverrides, always: AlwaysAllow): AllowList {
+  if (!taskText.trim()) return { apps: [], domains: [] };
+  return union(effectiveAllow(taskText, overrides), {
+    apps: always.apps.map((x) => x.bundleId),
+    domains: always.domains,
+  });
+}
+
+// ---------------------------------------------------------------------------------------
+// "Pause guard" (device-local; Rust treats now < pausedUntil as idle)
+// ---------------------------------------------------------------------------------------
+
+export const PAUSE_OPTIONS = [15, 30, 60] as const;
+const PAUSE_KEY = "focusbox-guard-paused-until";
+const MAX_PAUSE_MS = 24 * 60 * 60 * 1000;
+
+/** When a pause of `minutes` (clamped to 1–240) started at `now` ends. */
+export function pauseUntil(now: number, minutes: number): number {
+  const m = Number.isFinite(minutes) ? Math.min(240, Math.max(1, Math.round(minutes))) : 15;
+  return now + m * 60_000;
+}
+
+/** A stored pause end, or 0 if there is none, it has passed, or it is implausibly far out. */
+export function normalizePausedUntil(raw: unknown, now: number): number {
+  const n = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
+  if (!Number.isFinite(n) || n <= now || n > now + MAX_PAUSE_MS) return 0;
+  return Math.floor(n);
+}
+
+export function getPausedUntil(now = Date.now()): number {
+  try {
+    return normalizePausedUntil(localStorage.getItem(PAUSE_KEY), now);
+  } catch {
+    return 0;
+  }
+}
+
+export function storePausedUntil(until: number): void {
+  if (isDemo()) return;
+  try {
+    if (until > 0) localStorage.setItem(PAUSE_KEY, String(until));
+    else localStorage.removeItem(PAUSE_KEY);
+  } catch {
+    /* not persisted */
+  }
+}
+
+/** "HH:MM" in local time. */
+export function formatClock(ts: number): string {
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 /** Lenient read of the stored overrides: anything malformed is dropped, not trusted. */
 export function parseOverrides(raw: unknown): AllowOverrides {
   const out: AllowOverrides = {};
@@ -240,7 +446,9 @@ export const DEFAULT_GUARD_PREFS: GuardPrefs = {
   graceSecs: 30,
   blockCompletely: false,
   workday: { enabled: false, start: "10:00", end: "19:00", tz: "Asia/Bangkok" },
-  blur: true,
+  // Off by default since 0.2.26: the native material made the nudge read as nearly
+  // opaque. See PREFS_VERSION for the one-time switch-off of the old default.
+  blur: false,
   idleMins: 3,
 };
 
@@ -265,16 +473,27 @@ export function normalizePrefs(raw: unknown): GuardPrefs {
       end: typeof w.end === "string" && HHMM.test(w.end) ? w.end : d.workday.end,
       tz: typeof w.tz === "string" && w.tz.trim() ? w.tz.trim() : d.workday.tz,
     },
-    blur: r.blur !== false,
+    blur: r.blur === true,
     idleMins: (IDLE_OPTIONS as readonly number[]).includes(r.idleMins as number) ? (r.idleMins as number) : d.idleMins,
   };
 }
+
+/** Stored alongside the prefs. Version 2 = "blur default is Off" applied: settings saved
+ * before it (no version) had blur On only because that was the old default, so they get
+ * it switched Off once; anything chosen after that is respected. */
+const PREFS_VERSION = 2;
 
 export function getGuardPrefs(): GuardPrefs {
   if (isDemo()) return normalizePrefs(null);
   try {
     const raw = localStorage.getItem(PREFS_KEY);
-    return normalizePrefs(raw ? JSON.parse(raw) : null);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (parsed && typeof parsed === "object" && (parsed as { v?: unknown }).v !== PREFS_VERSION) {
+      const migrated = normalizePrefs({ ...parsed, blur: false });
+      storeGuardPrefs(migrated);
+      return migrated;
+    }
+    return normalizePrefs(parsed);
   } catch {
     return normalizePrefs(null);
   }
@@ -283,7 +502,7 @@ export function getGuardPrefs(): GuardPrefs {
 export function storeGuardPrefs(p: GuardPrefs): void {
   if (isDemo()) return;
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify(p));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ ...p, v: PREFS_VERSION }));
   } catch {
     /* storage full / disabled: the setting just won't survive a restart */
   }
@@ -295,7 +514,7 @@ export function storeGuardPrefs(p: GuardPrefs): void {
 
 export const NUDGE_OPACITY_KEY = "focusbox-guard-nudge-opacity";
 export const NUDGE_OPACITY_DEFAULT = 45;
-export const NUDGE_OPACITY_MIN = 10;
+export const NUDGE_OPACITY_MIN = 5;
 export const NUDGE_OPACITY_MAX = 95;
 export const NUDGE_OPACITY_STEP = 5;
 /** The text card never drops below this, so the words never sit on bare desktop. 0.92
@@ -303,7 +522,7 @@ export const NUDGE_OPACITY_STEP = 5;
  * and no blur. */
 export const NUDGE_CARD_FLOOR = 0.92;
 
-/** Percent, clamped to 10–95 and snapped to steps of 5. Anything unparseable → 45. */
+/** Percent, clamped to 5–95 and snapped to steps of 5. Anything unparseable → 45. */
 export function normalizeNudgeOpacity(raw: unknown): number {
   const n = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
   if (!Number.isFinite(n)) return NUDGE_OPACITY_DEFAULT;
@@ -375,6 +594,7 @@ export interface GuardConfigPayload {
   workday: { enabled: boolean; start: string; end: string; days: number[]; tz: string };
   blur: boolean;
   idleAfterSecs: number;
+  pausedUntil: number;
 }
 
 export function buildGuardConfig(
@@ -382,9 +602,11 @@ export function buildGuardConfig(
   task: { text: string; done: boolean } | null,
   timer: GuardTimer,
   overrides: AllowOverrides,
+  always: AlwaysAllow = { apps: [], domains: [] },
+  pausedUntil = 0,
 ): GuardConfigPayload {
   const text = task && !task.done ? task.text : "";
-  const allow = text ? effectiveAllow(text, overrides) : { apps: [], domains: [] };
+  const allow = mergedAllow(text, overrides, always);
   return {
     enabled: prefs.enabled,
     hasTask: !!task && !task.done && text.trim().length > 0,
@@ -397,6 +619,7 @@ export function buildGuardConfig(
     workday: { ...prefs.workday, days: WORKDAYS },
     blur: prefs.blur,
     idleAfterSecs: prefs.idleMins * 60,
+    pausedUntil: Math.max(0, Math.floor(pausedUntil)),
   };
 }
 
@@ -406,6 +629,15 @@ export async function pushGuardConfig(config: GuardConfigPayload): Promise<void>
     await invoke("guard_set_config", { config });
   } catch (err) {
     console.error("Focusbox: focus guard config push failed", err);
+  }
+}
+
+export async function guardRunningApps(): Promise<AllowedApp[]> {
+  if (!available()) return [];
+  try {
+    return await invoke<AllowedApp[]>("guard_running_apps");
+  } catch {
+    return [];
   }
 }
 

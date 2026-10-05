@@ -1,6 +1,22 @@
 import "./testDomShim";
 import { describe, expect, it, beforeEach } from "vitest";
 import {
+  addAlwaysApp,
+  addAlwaysDomain,
+  appDisplayName,
+  DEFAULT_ALWAYS_ALLOW,
+  getAlwaysAllow,
+  getPausedUntil,
+  mergedAllow,
+  normalizeHostname,
+  normalizePausedUntil,
+  parseAlwaysAllow,
+  pauseUntil,
+  removeAlwaysApp,
+  removeAlwaysDomain,
+  removeOverride,
+  storeAlwaysAllow,
+  storePausedUntil,
   toastCopy,
   truncateForToast,
   applyNudgeOpacity,
@@ -134,7 +150,7 @@ describe("buildGuardConfig", () => {
     expect(c.allowDomains).toContain("github.com");
     expect(c.workday.days).toEqual([1, 2, 3, 4, 5, 6]);
     expect(c.graceSecs).toBe(30);
-    expect(c.blur).toBe(true);
+    expect(c.blur).toBe(false);
     expect(c.idleAfterSecs).toBe(180);
   });
   it("treats a done or missing card as no task", () => {
@@ -153,6 +169,21 @@ describe("prefs", () => {
     expect(DEFAULT_GUARD_PREFS.idleMins).toBe(3);
     for (const m of [1, 2, 3, 5, 10]) expect(normalizePrefs({ idleMins: m }).idleMins).toBe(m);
     for (const bad of [0, 4, 15, -1, "5", null]) expect(normalizePrefs({ idleMins: bad }).idleMins).toBe(3);
+  });
+
+  it("blur defaults to Off and an old saved On is switched Off exactly once", () => {
+    expect(DEFAULT_GUARD_PREFS.blur).toBe(false);
+    // Saved by an older build: no version marker, blur On (the old default).
+    localStorage.setItem("focusbox-focus-guard", JSON.stringify({ enabled: true, graceSecs: 60, blur: true }));
+    const migrated = getGuardPrefs();
+    expect(migrated.blur).toBe(false);
+    expect(migrated.enabled).toBe(true);
+    expect(migrated.graceSecs).toBe(60);
+    expect(JSON.parse(localStorage.getItem("focusbox-focus-guard")!).v).toBe(2);
+    // The user turns it back On: respected from now on.
+    storeGuardPrefs({ ...migrated, blur: true });
+    expect(getGuardPrefs().blur).toBe(true);
+    expect(getGuardPrefs().blur).toBe(true);
   });
 
   it("round-trip through localStorage", () => {
@@ -178,7 +209,9 @@ describe("nudge opacity", () => {
     expect(getNudgeOpacity()).toBe(70);
   });
   it("clamps to 10–95, snaps to steps of 5 and rejects garbage", () => {
-    expect(normalizeNudgeOpacity(0)).toBe(10);
+    expect(normalizeNudgeOpacity(0)).toBe(5);
+    expect(normalizeNudgeOpacity(5)).toBe(5);
+    expect(normalizeNudgeOpacity(3)).toBe(5);
     expect(normalizeNudgeOpacity(100)).toBe(95);
     expect(normalizeNudgeOpacity("62")).toBe(60);
     expect(normalizeNudgeOpacity(63)).toBe(65);
@@ -192,6 +225,7 @@ describe("nudge opacity", () => {
   it("tint follows the setting, dark is heavier, and the card never drops below 92%", () => {
     expect(nudgeAlphas(45)).toEqual({ tint: 0.45, tintDark: 0.6, card: 0.92 });
     expect(nudgeAlphas(10)).toEqual({ tint: 0.1, tintDark: 0.25, card: 0.92 });
+    expect(nudgeAlphas(5)).toEqual({ tint: 0.05, tintDark: 0.2, card: 0.92 });
     expect(nudgeAlphas(70)).toEqual({ tint: 0.7, tintDark: 0.85, card: 0.95 });
     expect(nudgeAlphas(95)).toEqual({ tint: 0.95, tintDark: 1, card: 1 });
     for (let p = 10; p <= 95; p += 5) {
@@ -210,6 +244,118 @@ describe("nudge opacity", () => {
       "--nudge-tint-dark": "65%",
       "--nudge-card": "92%",
     });
+  });
+});
+
+describe("normalizeHostname", () => {
+  it("strips scheme, www, userinfo, port, path and wildcard, then lowercases", () => {
+    expect(normalizeHostname("https://WWW.GitHub.com/foo?x=1#y")).toBe("github.com");
+    expect(normalizeHostname("  notion.so  ")).toBe("notion.so");
+    expect(normalizeHostname("*.luxvps.net")).toBe("luxvps.net");
+    expect(normalizeHostname("user@billing.luxvps.net:8443/admin")).toBe("billing.luxvps.net");
+    expect(normalizeHostname("mail.google.com.")).toBe("mail.google.com");
+  });
+  it("rejects anything that isn't a dotted hostname", () => {
+    for (const bad of ["", "localhost", "github", "not a site", "foo_bar.com", "-x.com", "x-.com", "a..com", "192.168.1.1", "https://", "/path/only"]) {
+      expect(normalizeHostname(bad)).toBeNull();
+    }
+  });
+});
+
+describe("always-allowed list", () => {
+  beforeEach(() => localStorage.clear());
+  it("is seeded once with Claude, Terminal, iTerm, VS Code and claude.ai, then left alone", () => {
+    expect(getAlwaysAllow()).toEqual(DEFAULT_ALWAYS_ALLOW);
+    storeAlwaysAllow({ apps: [], domains: [] });
+    expect(getAlwaysAllow()).toEqual({ apps: [], domains: [] }); // an emptied list stays empty
+  });
+  it("adds and removes apps and sites without duplicates", () => {
+    let a = { apps: [], domains: [] } as ReturnType<typeof getAlwaysAllow>;
+    a = addAlwaysApp(a, { bundleId: "com.tinyspeck.slackmacgap", name: "Slack" });
+    expect(addAlwaysApp(a, { bundleId: "com.tinyspeck.slackmacgap", name: "Slack" })).toBe(a);
+    const r = addAlwaysDomain(a, "https://www.Figma.com/file/x");
+    expect(r.error).toBeUndefined();
+    a = r.next;
+    expect(a.domains).toEqual(["figma.com"]);
+    expect(addAlwaysDomain(a, "figma.com").error).toMatch(/already/);
+    expect(addAlwaysDomain(a, "not a site").error).toBeTruthy();
+    a = removeAlwaysDomain(removeAlwaysApp(a, "com.tinyspeck.slackmacgap"), "figma.com");
+    expect(a).toEqual({ apps: [], domains: [] });
+  });
+  it("parses stored data leniently", () => {
+    expect(
+      parseAlwaysAllow({
+        apps: [{ bundleId: "x.y" }, { bundleId: "" }, 7, { bundleId: "x.y", name: "dup" }],
+        domains: ["GitHub.com", "bad", 3, "github.com"],
+      }),
+    ).toEqual({ apps: [{ bundleId: "x.y", name: "x.y" }], domains: ["github.com"] });
+    expect(parseAlwaysAllow("nope")).toEqual({ apps: [], domains: [] });
+  });
+  it("shows known apps by name", () => {
+    expect(appDisplayName("com.microsoft.VSCode")).toBe("VS Code");
+    expect(appDisplayName("a.b", [{ bundleId: "a.b", name: "Thing" }])).toBe("Thing");
+    expect(appDisplayName("unknown.app")).toBe("unknown.app");
+  });
+});
+
+describe("allow-list merge", () => {
+  it("unions keyword defaults, the task's overrides and the always list", () => {
+    const always = { apps: [{ bundleId: "com.apple.Terminal", name: "Terminal" }], domains: ["claude.ai", "figma.com"] };
+    const overrides = { "send dms": { apps: ["com.apple.Notes"], domains: ["facebook.com"] } };
+    expect(mergedAllow("Send DMs", overrides, always)).toEqual({
+      apps: ["com.apple.Notes", "com.apple.Terminal"],
+      domains: ["instagram.com", "facebook.com", "claude.ai", "figma.com"],
+    });
+    const code = mergedAllow("fix bug", {}, always);
+    expect(code.apps.filter((a) => a === "com.apple.Terminal")).toHaveLength(1);
+    expect(code.domains.filter((d) => d === "claude.ai")).toHaveLength(1);
+    expect(mergedAllow("   ", overrides, always)).toEqual({ apps: [], domains: [] });
+  });
+  it("buildGuardConfig sends the merged list and the pause", () => {
+    const c = buildGuardConfig(
+      { ...DEFAULT_GUARD_PREFS, enabled: true },
+      { text: "think", done: false },
+      "running",
+      {},
+      { apps: [{ bundleId: "a.b", name: "A" }], domains: ["x.com"] },
+      12345.9,
+    );
+    expect(c.allowApps).toEqual(["a.b"]);
+    expect(c.allowDomains).toEqual(["x.com"]);
+    expect(c.pausedUntil).toBe(12345);
+  });
+  it("removeOverride drops one entry and the task once empty", () => {
+    const o = { k: { apps: ["a"], domains: ["x.com"] } };
+    const one = removeOverride(o, "k", { app: "a" });
+    expect(one).toEqual({ k: { apps: [], domains: ["x.com"] } });
+    expect(removeOverride(one, "k", { domain: "x.com" })).toEqual({});
+    expect(removeOverride(o, "k", { app: "zzz" })).toBe(o);
+    expect(removeOverride(o, "missing", { app: "a" })).toBe(o);
+  });
+});
+
+describe("pause", () => {
+  beforeEach(() => localStorage.clear());
+  const now = 1_700_000_000_000;
+  it("clamps the length to 1–240 minutes", () => {
+    expect(pauseUntil(now, 15)).toBe(now + 15 * 60_000);
+    expect(pauseUntil(now, 0)).toBe(now + 60_000);
+    expect(pauseUntil(now, 10_000)).toBe(now + 240 * 60_000);
+    expect(pauseUntil(now, Number.NaN)).toBe(now + 15 * 60_000);
+  });
+  it("expires: a past, garbage or absurdly distant pause reads as none", () => {
+    expect(normalizePausedUntil(now + 1000, now)).toBe(now + 1000);
+    expect(normalizePausedUntil(now, now)).toBe(0);
+    expect(normalizePausedUntil(now - 1, now)).toBe(0);
+    expect(normalizePausedUntil("abc", now)).toBe(0);
+    expect(normalizePausedUntil(now + 2 * 24 * 3600_000, now)).toBe(0);
+  });
+  it("survives a restart via localStorage, and Resume clears it", () => {
+    storePausedUntil(now + 30 * 60_000);
+    expect(getPausedUntil(now)).toBe(now + 30 * 60_000);
+    expect(getPausedUntil(now + 31 * 60_000)).toBe(0); // auto-expired
+    storePausedUntil(0);
+    expect(localStorage.getItem("focusbox-guard-paused-until")).toBeNull();
   });
 });
 

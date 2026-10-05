@@ -18,8 +18,6 @@ export default function NewTaskGuard({ current, next, blockCompletely, onPark, o
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  // Parked, but not delivered yet (no key / key rejected): say so and offer only Close.
-  const [parkedPending, setParkedPending] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -33,10 +31,10 @@ export default function NewTaskGuard({ current, next, blockCompletely, onPark, o
     setBusy(true);
     setMessage(null);
     try {
+      // Any other outcome closes this prompt; the toast reports it (no duplicate here).
       const r = await onPark();
-      if (r === "rejected" || r === "no_token" || r === "auth_blocked") {
+      if (r === "rejected") {
         setMessage(parkResultMessage(r));
-        setParkedPending(r !== "rejected");
         setBusy(false);
       }
     } catch (err) {
@@ -56,16 +54,14 @@ export default function NewTaskGuard({ current, next, blockCompletely, onPark, o
           {blockCompletely ? " Park it for later." : " Park it for later, or switch with a reason."}
         </p>
         <div className="account__row">
-          {!parkedPending && (
-            <button type="button" className="account__btn account__btn--primary" disabled={busy} onClick={() => void park()}>
-              Park it
-            </button>
-          )}
+          <button type="button" className="account__btn account__btn--primary" disabled={busy} onClick={() => void park()}>
+            Park it
+          </button>
           <button type="button" className="account__btn" disabled={busy} onClick={onCancel}>
-            {parkedPending ? "Close" : "Cancel"}
+            Cancel
           </button>
         </div>
-        {!blockCompletely && !parkedPending && (
+        {!blockCompletely && (
           <div className="newtask__switch">
             <label className="setting__hint" htmlFor="newtask-reason">
               Switch anyway. Why? ({MIN_REASON_CHARS}+ characters)

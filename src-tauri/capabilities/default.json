@@ -31,6 +31,7 @@
     "allow-guard-log-newtask",
     "allow-guard-stats",
     "allow-guard-preview-nudge",
+    "allow-guard-running-apps",
     "allow-todoist-status",
     "allow-todoist-set-token",
     "allow-todoist-clear-token",
