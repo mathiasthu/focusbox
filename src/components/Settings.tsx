@@ -70,6 +70,9 @@ interface Props {
   onChimeChange: (enabled: boolean) => void;
   chimeSound: SoundId;
   onChimeSoundChange: (id: SoundId) => void;
+  /** "Remind me to start the timer" (device-local). */
+  remindStart: boolean;
+  onRemindStartChange: (on: boolean) => void;
   autostart: boolean;
   onAutostartChange: (enabled: boolean) => void;
   /** macOS desktop only (the Rust side reports whether it can watch other apps). */
@@ -100,6 +103,8 @@ export default function Settings({
   onChimeChange,
   chimeSound,
   onChimeSoundChange,
+  remindStart,
+  onRemindStartChange,
   autostart,
   onAutostartChange,
   guardAvailable,
@@ -244,6 +249,35 @@ export default function Settings({
             <span className="setting__hint">Pick one to hear it.</span>
           </div>
         )}
+
+        {/* Device-local (localStorage), not synced. */}
+        <div className="setting setting--col">
+          <div className="setting__row">
+            <span className="setting__label">Remind me to start the timer</span>
+            <div className="segmented" role="group" aria-label="Remind me to start the timer">
+              <button
+                type="button"
+                className={`segmented__opt${remindStart ? " segmented__opt--active" : ""}`}
+                aria-pressed={remindStart}
+                onClick={() => onRemindStartChange(true)}
+              >
+                On
+              </button>
+              <button
+                type="button"
+                className={`segmented__opt${!remindStart ? " segmented__opt--active" : ""}`}
+                aria-pressed={!remindStart}
+                onClick={() => onRemindStartChange(false)}
+              >
+                Off
+              </button>
+            </div>
+          </div>
+          <span className="setting__hint">
+            When a Focus task is set but the timer isn't running, asks here in Focusbox after a few
+            seconds. Never pops up over other apps.
+          </span>
+        </div>
 
         {isTrayAvailable && (
           <div className="setting">

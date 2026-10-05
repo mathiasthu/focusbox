@@ -501,8 +501,8 @@ export default function FocusGuardSettings({ prefs, onChange, onOpenStats, previ
                 </label>
               </div>
               <span className="setting__hint">
-                Monday to Saturday. During these hours the guard is on even with the timer paused, and
-                asks you to pick a task when none is running.
+                Monday to Saturday. During these hours a Focus task stays guarded even with the timer
+                paused. It never pops up to ask you to start a task.
               </span>
             </>
           )}

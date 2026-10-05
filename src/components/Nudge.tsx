@@ -18,7 +18,7 @@ import {
 import { applyTheme, getStoredMode } from "../lib/theme";
 
 interface NudgePayload {
-  kind: "drift" | "needTask" | "preview";
+  kind: "drift" | "preview";
   task: string;
   label: string | null;
   appName: string | null;
@@ -187,27 +187,6 @@ export default function Nudge() {
           <div className="nudge__actions">
             <button className="nudge__btn nudge__btn--primary" disabled={busy} onClick={() => void resolve("close")}>
               Close preview
-            </button>
-          </div>
-          {error && <p className="nudge__error">{error}</p>}
-        </div>
-      </div>
-    );
-  }
-
-  if (state.kind === "needTask") {
-    return (
-      <div className="nudge">
-        <div className="nudge__panel">
-          <p className="nudge__eyebrow">Focus guard</p>
-          <h1 className="nudge__task">No task running</h1>
-          <p className="nudge__sub">It's your work time. Pick one thing and start the timer.</p>
-          <div className="nudge__actions">
-            <button className="nudge__btn nudge__btn--primary" disabled={busy} onClick={() => void resolve("open_main")}>
-              Open Focusbox
-            </button>
-            <button className="nudge__btn" disabled={busy} onClick={() => void resolve("snooze")}>
-              Not now (10 min)
             </button>
           </div>
           {error && <p className="nudge__error">{error}</p>}

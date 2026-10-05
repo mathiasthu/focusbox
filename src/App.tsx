@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Editor } from "@tiptap/react";
-import Timer from "./components/Timer";
+import Timer, { type TimerHandle } from "./components/Timer";
+import StartTimerPrompt from "./components/StartTimerPrompt";
+import {
+  getRemindStart,
+  msUntilStartPrompt,
+  nextIdleSince,
+  shouldShowStartPrompt,
+  storeRemindStart,
+  type IdleSince,
+} from "./lib/timerPrompt";
 import TaskList from "./components/TaskList";
 import MobileNotesChecklist from "./components/MobileNotesChecklist";
 import Notes, { LINE_DRAG_MIME } from "./components/Notes";
@@ -73,6 +82,7 @@ import {
   type AlwaysAllow,
   storeGuardPrefs,
   timerStateFromStatus,
+  normalizeTaskKey,
   type AllowOverrides,
   type GuardPrefs,
 } from "./lib/focusGuard";
@@ -105,6 +115,12 @@ export default function App() {
   const editorRef = useRef<Editor | null>(null);
   const [lineDragging, setLineDragging] = useState(false);
   const focusTask = getFocusedTask(notesDoc);
+  // "Start the timer for this task?" (in-app only). Device-local preference.
+  const timerRef = useRef<TimerHandle>(null);
+  const [remindStart, setRemindStart] = useState<boolean>(getRemindStart);
+  const [idleSince, setIdleSince] = useState<IdleSince | null>(null);
+  const [startDismissedKey, setStartDismissedKey] = useState<string | null>(null);
+  const [promptNow, setPromptNow] = useState(() => Date.now());
   // Focus guard (macOS desktop only). Device-local, never synced — see focusGuard.ts.
   const [guardSupported, setGuardSupported] = useState(false);
   const [guardPrefs, setGuardPrefs] = useState<GuardPrefs>(getGuardPrefs);
@@ -260,6 +276,36 @@ export default function App() {
   const focusText = focusTask?.text ?? null;
   const focusDone = focusTask?.done ?? false;
   const guardTimer = timerStateFromStatus(timerStatus);
+
+  // ---- "Start the timer for this task?" (main window only, never a popup) ----
+  const startCardKey = focusTask && !focusTask.done && focusTask.text.trim() ? normalizeTaskKey(focusTask.text) : null;
+  useEffect(() => {
+    storeRemindStart(remindStart);
+  }, [remindStart]);
+  // When this card started waiting on an idle timer; a new card or a started timer resets it.
+  useEffect(() => {
+    setIdleSince((prev) => nextIdleSince(prev, startCardKey, timerStatus, Date.now()));
+  }, [startCardKey, timerStatus]);
+  // "Not now" lasts until the card changes.
+  useEffect(() => {
+    setStartDismissedKey((k) => (k !== null && k !== startCardKey ? null : k));
+  }, [startCardKey]);
+  const startPromptInput = {
+    enabled: remindStart && !mobileWeb,
+    cardKey: startCardKey,
+    timerStatus,
+    idleSince,
+    dismissedKey: startDismissedKey,
+    now: promptNow,
+  };
+  const startPromptVisible = shouldShowStartPrompt(startPromptInput);
+  // One timer to re-render when the 20s are up (nothing else ticks while the timer is idle).
+  const startPromptWait = msUntilStartPrompt({ ...startPromptInput, now: Date.now() });
+  useEffect(() => {
+    if (startPromptWait === null) return;
+    const t = window.setTimeout(() => setPromptNow(Date.now()), startPromptWait + 50);
+    return () => window.clearTimeout(t);
+  }, [startPromptWait === null, idleSince?.since, idleSince?.key]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!guardSupported || !loaded) return;
     const task = focusText === null ? null : { text: focusText, done: focusDone };
@@ -318,9 +364,6 @@ export default function App() {
           listen<{ taskKey: string; app?: string | null; domain?: string | null }>("guard://allow", (ev) =>
             guardEventsRef.current.onAllow(ev.payload),
           ),
-          // Rust has already shown + focused this window; just get Settings out of the way
-          // so the notes (where a task gets picked) are visible.
-          listen("guard://open-main", () => setSettingsOpen(false)),
         ]);
         if (dead) subs.forEach((u) => u());
         else unlisteners.push(...subs);
@@ -559,7 +602,14 @@ export default function App() {
           onReset={handleTimerReset}
           onTick={handleTimerTick}
           onFinish={handleTimerFinish}
+          controlRef={timerRef}
         />
+        {startPromptVisible && (
+          <StartTimerPrompt
+            onStart={() => timerRef.current?.start()}
+            onDismiss={() => setStartDismissedKey(startCardKey)}
+          />
+        )}
         {(lineDragging || focusTask) && (
           <div
             className={`focus-slot${lineDragging ? " focus-slot--target" : ""}`}
@@ -609,6 +659,8 @@ export default function App() {
         onChimeChange={changeChime}
         chimeSound={chimeSound}
         onChimeSoundChange={changeChimeSound}
+        remindStart={remindStart}
+        onRemindStartChange={setRemindStart}
         autostart={autostart}
         onAutostartChange={changeAutostart}
         guardAvailable={guardSupported && !demo}

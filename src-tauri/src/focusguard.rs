@@ -40,10 +40,6 @@ const FOCUSED_CHUNK_MS: u64 = 60_000;
 /// On task, no input still counts as focused (waiting on a build or an AI agent,
 /// reading) for this long; past it the user is away.
 const LONG_IDLE_MS: u64 = 15 * 60_000;
-/// Whole-workday mode: first "pick a task" nudge after this long without one...
-const NEED_TASK_FIRST_MS: u64 = 2 * 60_000;
-/// ...then again this long after each dismissal.
-const NEED_TASK_REPEAT_MS: u64 = 10 * 60_000;
 /// Minimum length of a typed reason (trimmed, in characters).
 pub const MIN_REASON_CHARS: usize = 10;
 /// Anything longer from the webview is cut, so the log can't be bloated from JS.
@@ -169,17 +165,17 @@ pub enum Mode {
     Idle,
     /// A task is active: count off-task time.
     Guard,
-    /// Whole-workday mode, inside the window, no task running: prompt to pick one.
-    NeedTask,
 }
 
 /// The guard's mode for a config and whether "now" is inside the workday window.
 ///
 /// - Off: idle.
 /// - A Focus task with the timer running: guard.
-/// - Inside the workday window: a Focus task with the timer paused is still guarded; no
-///   task, or a task whose timer was never started (or has finished), is "need task".
-/// - Outside the window, anything short of a running timer is idle.
+/// - Inside the workday window: a Focus task with the timer paused is still guarded.
+/// - Anything else is idle. In particular there is no prompt when no task or no timer is
+///   running: the owner asked for no on-screen "start a task" nagging (2026-10-05). A Focus
+///   card with an idle timer gets a quiet in-app reminder in the main window instead
+///   (src/lib/timerPrompt.ts).
 pub fn mode_for(cfg: &GuardConfig, in_window: bool) -> Mode {
     if !cfg.enabled {
         return Mode::Idle;
@@ -187,11 +183,8 @@ pub fn mode_for(cfg: &GuardConfig, in_window: bool) -> Mode {
     if cfg.has_task && cfg.timer == TimerState::Running {
         return Mode::Guard;
     }
-    if cfg.workday.enabled && in_window {
-        if cfg.has_task && cfg.timer == TimerState::Paused {
-            return Mode::Guard;
-        }
-        return Mode::NeedTask;
+    if cfg.workday.enabled && in_window && cfg.has_task && cfg.timer == TimerState::Paused {
+        return Mode::Guard;
     }
     Mode::Idle
 }
@@ -420,7 +413,6 @@ pub fn is_on_task(cfg: &GuardConfig, app: &FrontApp) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NudgeKind {
     Drift { app: FrontApp, count: u32 },
-    NeedTask,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -444,8 +436,6 @@ pub struct Machine {
     drift_count: u32,
     last_on_task_bundle: Option<String>,
     nudge: Option<NudgeKind>,
-    need_ms: u64,
-    need_threshold_ms: u64,
     away_ms: u64,
 }
 
@@ -461,8 +451,6 @@ impl Default for Machine {
             drift_count: 0,
             last_on_task_bundle: None,
             nudge: None,
-            need_ms: 0,
-            need_threshold_ms: NEED_TASK_FIRST_MS,
             away_ms: 0,
         }
     }
@@ -540,19 +528,12 @@ impl Machine {
                 self.flush_focused(&mut out);
             }
             self.flush_away(&mut out);
-            let keep = matches!(
-                (&self.nudge, mode),
-                (Some(NudgeKind::Drift { .. }), Mode::Guard) | (Some(NudgeKind::NeedTask), Mode::NeedTask)
-            );
+            let keep = matches!((&self.nudge, mode), (Some(NudgeKind::Drift { .. }), Mode::Guard));
             if self.nudge.is_some() && !keep {
                 self.nudge = None;
                 out.push(Action::CloseNudge);
             }
             self.off_ms = 0;
-            if mode == Mode::NeedTask {
-                self.need_ms = 0;
-                self.need_threshold_ms = NEED_TASK_FIRST_MS;
-            }
             self.mode = mode;
         }
 
@@ -604,30 +585,14 @@ impl Machine {
                     }
                 }
             }
-            (Mode::NeedTask, Some(Sample::Front(app))) => {
-                if self.nudge.is_none() && is_away(cfg, app, false) {
-                    // The 2/10-minute "pick a task" timers pause while nobody is there.
-                    self.add_away(dt, &mut out);
-                } else if self.nudge.is_none() {
-                    self.need_ms += dt;
-                    if self.need_ms >= self.need_threshold_ms {
-                        self.need_ms = 0;
-                        self.nudge = Some(NudgeKind::NeedTask);
-                        out.push(Action::OpenNudge(NudgeKind::NeedTask));
-                    }
-                }
-            }
         }
         out
     }
 
-    /// The user answered the nudge. Counting starts fresh; a "pick a task" prompt comes
-    /// back after the repeat interval if there is still no task.
+    /// The user answered the nudge. Counting starts fresh.
     pub fn resolve(&mut self) {
         self.nudge = None;
         self.off_ms = 0;
-        self.need_ms = 0;
-        self.need_threshold_ms = NEED_TASK_REPEAT_MS;
     }
 }
 
@@ -647,7 +612,6 @@ pub fn reason_needed(kind: &NudgeKind, action: &str) -> bool {
             "back" | "park" | "allow" => *count >= 2,
             _ => false,
         },
-        NudgeKind::NeedTask => false,
     }
 }
 
@@ -1176,7 +1140,7 @@ mod platform {
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct NudgePayload {
-    /// "drift" | "needTask"
+    /// "drift" | "preview"
     pub kind: String,
     pub task: String,
     /// The off-task site if known, else the app name.
@@ -1313,16 +1277,6 @@ impl Inner {
                 reason_required: *count >= 2,
                 min_reason_chars: MIN_REASON_CHARS,
             }),
-            NudgeKind::NeedTask => Some(NudgePayload {
-                kind: "needTask".into(),
-                task: String::new(),
-                label: None,
-                app_name: None,
-                domain: None,
-                drift_count: 0,
-                reason_required: false,
-                min_reason_chars: MIN_REASON_CHARS,
-            }),
         }
     }
 }
@@ -1450,19 +1404,18 @@ fn watch<R: Runtime>(app: AppHandle<R>, state: Arc<GuardState>) {
                 Action::OpenNudge(kind) => {
                     // A real nudge replaces any preview on screen (same window, refreshed).
                     state.end_preview();
-                    // The app in front when it fired (the drifted-to app, or for the
-                    // workday prompt whatever the user is in), never Focusbox's guess.
-                    let pid = match (&kind, &sample) {
-                        (NudgeKind::Drift { app: off, .. }, _) if off.pid > 0 => Some(off.pid),
-                        (_, Some(Sample::Front(a))) if a.pid > 0 => Some(a.pid),
+                    // The app in front when it fired (the drifted-to app), never
+                    // Focusbox's guess; else whatever the sample saw in front.
+                    let NudgeKind::Drift { app: off, .. } = &kind;
+                    let pid = match &sample {
+                        _ if off.pid > 0 => Some(off.pid),
+                        Some(Sample::Front(a)) if a.pid > 0 => Some(a.pid),
                         _ => None,
                     };
                     if let Ok(mut i) = state.inner.lock() {
                         i.target_pid = pid;
                     }
-                    if let NudgeKind::Drift { app: off, .. } = &kind {
-                        state.log_kind("drift", &cfg.task_text, Some(off), None);
-                    }
+                    state.log_kind("drift", &cfg.task_text, Some(off), None);
                     open_nudge_window(&app);
                 }
                 Action::CloseNudge => close_nudge_window(&app),
@@ -1866,7 +1819,6 @@ pub struct AllowEvent {
 ///   card; the guard then waits for the next focus.
 /// - `allow`: add the off-task site (or app, if no site) to this task's allow-list, then
 ///   back to that app.
-/// - `open_main` / `snooze`: answers to the workday "pick a task" nudge.
 /// - `close`: only when no nudge is open (a window left behind by a race); closes it.
 ///
 /// Returns "ok", or for `park` the Todoist outcome ("sent" | "queued" | "rejected" |
@@ -1957,12 +1909,6 @@ pub async fn nudge_resolve<R: Runtime>(
                 show_main(&app);
             }
         }
-        (NudgeKind::NeedTask, "open_main") => {
-            finish(&state, &app);
-            let _ = app.emit_to("main", "guard://open-main", ());
-            show_main(&app);
-        }
-        (NudgeKind::NeedTask, "snooze") => finish(&state, &app),
         _ => return Err(format!("unknown action: {action}")),
     }
     Ok(result)
@@ -2145,11 +2091,13 @@ mod tests {
         c.workday.enabled = true;
         assert_eq!(mode_for(&c, false), Mode::Idle, "outside the window a paused timer is idle");
         assert_eq!(mode_for(&c, true), Mode::Guard, "inside the window a paused task is guarded");
+        // No on-screen "start a task" prompt any more: inside the window, a card whose
+        // timer was never started, or no card at all, is simply idle.
         c.timer = TimerState::Idle;
-        assert_eq!(mode_for(&c, true), Mode::NeedTask);
+        assert_eq!(mode_for(&c, true), Mode::Idle);
         c.has_task = false;
         c.timer = TimerState::Running;
-        assert_eq!(mode_for(&c, true), Mode::NeedTask);
+        assert_eq!(mode_for(&c, true), Mode::Idle);
         assert_eq!(mode_for(&c, false), Mode::Idle);
         c.enabled = false;
         assert_eq!(mode_for(&c, true), Mode::Idle);
@@ -2339,41 +2287,44 @@ mod tests {
     }
 
     #[test]
-    fn need_task_prompts_after_two_minutes_then_every_ten() {
-        let mut c = cfg();
-        c.has_task = false;
-        c.timer = TimerState::Idle;
-        c.workday.enabled = true;
-        let mut m = Machine::default();
-        let any = app("com.google.Chrome", Some("youtube.com"));
-        let mut opened_at = Vec::new();
-        let mut t = 0;
-        while t <= 30 * 60_000 {
-            let a = m.step(&c, mode_for(&c, true), Some(&any), t);
-            if opened(&a) > 0 {
-                opened_at.push(t);
-                m.resolve(); // "Not now"
+    fn workday_mode_never_opens_a_nudge_without_a_running_or_paused_task() {
+        // The old "No task running" full-screen prompt is gone: a whole workday with no
+        // card, or a card whose timer was never started, opens nothing and logs nothing.
+        for (has_task, timer) in [(false, TimerState::Idle), (false, TimerState::Running), (true, TimerState::Idle)] {
+            let mut c = cfg();
+            c.has_task = has_task;
+            c.timer = timer;
+            c.workday.enabled = true;
+            let mut m = Machine::default();
+            let any = app("com.google.Chrome", Some("youtube.com"));
+            let mut t = 0;
+            while t <= 60 * 60_000 {
+                let mode = mode_for(&c, true);
+                let a = m.step(&c, mode, if mode == Mode::Idle { None } else { Some(&any) }, t);
+                assert!(a.is_empty(), "{has_task} {timer:?}: {a:?}");
+                t += 2000;
             }
-            t += 2000;
         }
-        assert_eq!(opened_at, vec![120_000, 720_000, 1_320_000]);
     }
 
     #[test]
-    fn starting_a_task_closes_the_need_task_nudge() {
+    fn workday_mode_still_guards_a_paused_task() {
         let mut c = cfg();
-        c.has_task = false;
+        c.timer = TimerState::Paused;
         c.workday.enabled = true;
         let mut m = Machine::default();
-        let any = app("com.google.Chrome", Some("youtube.com"));
-        let mut t = 0;
-        while m.nudge().is_none() {
-            m.step(&c, mode_for(&c, true), Some(&any), t);
+        let a = run_in_window(&mut m, &c, &app("com.google.Chrome", Some("youtube.com")), 0, 30_000);
+        assert_eq!(opened(&a), 1);
+    }
+
+    fn run_in_window(m: &mut Machine, c: &GuardConfig, s: &Sample, from: u64, to: u64) -> Vec<Action> {
+        let mut out = Vec::new();
+        let mut t = from;
+        while t <= to {
+            out.extend(m.step(c, mode_for(c, true), Some(s), t));
             t += 2000;
         }
-        c.has_task = true;
-        let a = m.step(&c, mode_for(&c, true), Some(&any), t);
-        assert!(a.contains(&Action::CloseNudge));
+        out
     }
 
     #[test]
@@ -2387,8 +2338,6 @@ mod tests {
         }
         assert!(reason_needed(&first, "switch"), "switching always needs a reason");
         assert!(reason_needed(&repeat, "switch"));
-        assert!(!reason_needed(&NudgeKind::NeedTask, "open_main"));
-        assert!(!reason_needed(&NudgeKind::NeedTask, "snooze"));
     }
 
     #[test]
@@ -2517,31 +2466,6 @@ mod tests {
         let video_doesnt_matter = idle_app("com.microsoft.VSCode", None, 16 * 60, true);
         let a = run(&mut m, &c, &video_doesnt_matter, 244_000, 364_000);
         assert_eq!(sum_secs(&a, false), 0);
-    }
-
-    #[test]
-    fn the_workday_prompt_waits_while_away() {
-        let mut c = cfg();
-        c.has_task = false;
-        c.timer = TimerState::Idle;
-        c.workday.enabled = true;
-        let mut m = Machine::default();
-        let gone = idle_app("com.google.Chrome", Some("youtube.com"), 600, false);
-        let mut t = 0;
-        while t <= 30 * 60_000 {
-            assert_eq!(opened(&m.step(&c, mode_for(&c, true), Some(&gone), t)), 0);
-            t += 2000;
-        }
-        // Back at the desk: the 2-minute timer starts from where it paused (zero).
-        let here = app("com.google.Chrome", Some("youtube.com"));
-        let mut opened_at = None;
-        while opened_at.is_none() {
-            t += 2000;
-            if opened(&m.step(&c, mode_for(&c, true), Some(&here), t)) > 0 {
-                opened_at = Some(t);
-            }
-        }
-        assert_eq!(opened_at.unwrap() - 30 * 60_000, 120_000);
     }
 
     #[test]
@@ -2777,9 +2701,10 @@ mod tests {
         c.paused_until = 0;
         assert_eq!(effective_mode(&c, false, 1), Mode::Guard);
         c.workday.enabled = true;
-        c.has_task = false;
+        c.timer = TimerState::Paused;
         c.paused_until = 10;
-        assert_eq!(effective_mode(&c, true, 5), Mode::Idle, "the workday prompt pauses too");
+        assert_eq!(effective_mode(&c, true, 5), Mode::Idle, "the workday guard pauses too");
+        assert_eq!(effective_mode(&c, true, 10), Mode::Guard);
     }
 
     #[test]

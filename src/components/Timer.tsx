@@ -1,4 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
+
+/** What App can do to the timer from outside: exactly what the Start button does. */
+export interface TimerHandle {
+  start: () => void;
+}
 
 const PRESETS = [
   { label: "30", unit: "min", sec: 30 * 60 },
@@ -45,9 +50,13 @@ interface Props {
   // extension). Used for the optional end-of-timer chime; the timer itself stays
   // unaware of sound, same as it does with the tray.
   onFinish?: () => void;
+  // Lets App start the countdown (the in-app "Start the timer for this task?" reminder)
+  // through the same start() the Start button uses, so tray title, chime and the
+  // backstop interval behave identically.
+  controlRef?: Ref<TimerHandle>;
 }
 
-export default function Timer({ onTimeUpReset, onReset, onTick, onFinish }: Props) {
+export default function Timer({ onTimeUpReset, onReset, onTick, onFinish, controlRef }: Props) {
   const [durationSec, setDurationSec] = useState(30 * 60);
   // Remaining time in milliseconds — drives both the readout and the ring.
   const [remainingMs, setRemainingMs] = useState(30 * 60 * 1000);
@@ -143,6 +152,12 @@ export default function Timer({ onTimeUpReset, onReset, onTick, onFinish }: Prop
   function pause() {
     setRunning(false); // remainingMs already holds the current value
   }
+  // Only from idle, like the Start button (which only shows when not running/finished).
+  const startRef = useRef(start);
+  startRef.current = () => {
+    if (!running && !finished) start();
+  };
+  useImperativeHandle(controlRef, () => ({ start: () => startRef.current() }), []);
   function reset() {
     const wasFinished = finished;
     setRunning(false);

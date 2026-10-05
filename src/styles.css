@@ -1642,6 +1642,43 @@ body::after {
   margin: 10px 0 4px;
   border-radius: 10px;
 }
+
+/* "Start the timer for this task?": inline, under the timer (StartTimerPrompt.tsx). */
+.start-prompt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 13.5px;
+  animation: fade-in 0.2s ease both;
+}
+.start-prompt__text {
+  font-weight: 600;
+}
+.start-prompt__actions {
+  display: flex;
+  gap: 8px;
+}
+.start-prompt__btn {
+  font-size: 13px;
+  padding: 6px 14px;
+}
+.start-prompt__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .start-prompt {
+    animation: none;
+  }
+}
 .focus-slot--target {
   outline: 2px dashed var(--accent);
   outline-offset: 2px;
