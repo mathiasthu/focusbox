@@ -94,6 +94,9 @@ function AlwaysAllowed({ extras }: { extras: GuardExtras }) {
   return (
     <div className="guard-settings__allow">
       <span className="guard-settings__label">Always allowed</span>
+      <span className="setting__hint">
+        Counts for every task. For apps that only fit some tasks, use Allow on the nudge instead.
+      </span>
       <div className="guard-chips">
         {a.apps.map((x) => (
           <Chip key={x.bundleId} label={x.name} title={x.bundleId} onRemove={() => set(removeAlwaysApp(a, x.bundleId))} />

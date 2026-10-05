@@ -52,7 +52,15 @@ const KEYWORDS: [string[], AllowList][] = [
   [["dm", "dms", "leads", "lead", "outreach", "instagram"], { apps: [], domains: ["instagram.com"] }],
   [["linkedin"], { apps: [], domains: ["linkedin.com"] }],
   [["whmcs", "luxvps", "billing", "ticket", "tickets"], { apps: [], domains: ["luxvps.net", "billing.luxvps.net"] }],
-  [["code", "focusbox", "build", "bug", "bugs", "deploy"], CODE],
+  // Dev work: the coding tools come from the task's wording, never from a global list,
+  // so "Read and meditate" doesn't quietly allow Claude.
+  [
+    [
+      "code", "coding", "dev", "build", "bug", "bugs", "fix", "feature", "deploy", "ship",
+      "release", "repo", "github", "focusbox", "claude", "app", "tauri", "website",
+    ],
+    CODE,
+  ],
   [["email", "emails", "gmail", "inbox"], { apps: [], domains: ["mail.google.com"] }],
   [["momentum", "website"], { apps: [], domains: ["momentumminds.net"] }],
   [["notion"], { apps: ["notion.id"], domains: ["notion.so"] }],
@@ -172,16 +180,17 @@ export interface AlwaysAllow {
   domains: string[];
 }
 
-/** Seeded the first time, then entirely the user's to edit. */
-export const DEFAULT_ALWAYS_ALLOW: AlwaysAllow = {
-  apps: [
-    { bundleId: "com.anthropic.claudefordesktop", name: "Claude" },
-    { bundleId: "com.apple.Terminal", name: "Terminal" },
-    { bundleId: "com.googlecode.iterm2", name: "iTerm" },
-    { bundleId: "com.microsoft.VSCode", name: "VS Code" },
-  ],
+/** Starts empty: anything here is on task for EVERY task, so it's the user's to fill. */
+export const DEFAULT_ALWAYS_ALLOW: AlwaysAllow = { apps: [], domains: [] };
+
+/** What 0.2.26 and 0.2.27 seeded into everyone's list. Version 2 of the stored list takes
+ * exactly these out once (they made Claude "on task" for "Read and meditate"); anything
+ * the user added is kept, and re-adding one afterwards sticks. */
+export const OLD_ALWAYS_SEED = {
+  apps: ["com.anthropic.claudefordesktop", "com.apple.Terminal", "com.googlecode.iterm2", "com.microsoft.VSCode"],
   domains: ["claude.ai"],
 };
+const ALWAYS_VERSION = 2;
 
 const ALWAYS_KEY = "focusbox-guard-always-allow";
 
@@ -207,26 +216,37 @@ export function parseAlwaysAllow(raw: unknown): AlwaysAllow {
   return out;
 }
 
+/** Remove the old seed entries (see OLD_ALWAYS_SEED), keeping everything else. */
+export function withoutOldSeed(a: AlwaysAllow): AlwaysAllow {
+  return {
+    apps: a.apps.filter((x) => !OLD_ALWAYS_SEED.apps.includes(x.bundleId)),
+    domains: a.domains.filter((d) => !OLD_ALWAYS_SEED.domains.includes(d)),
+  };
+}
+
 export function getAlwaysAllow(): AlwaysAllow {
-  const seed = () => ({ apps: [...DEFAULT_ALWAYS_ALLOW.apps], domains: [...DEFAULT_ALWAYS_ALLOW.domains] });
-  if (isDemo()) return seed();
+  const empty = () => ({ apps: [...DEFAULT_ALWAYS_ALLOW.apps], domains: [...DEFAULT_ALWAYS_ALLOW.domains] });
+  if (isDemo()) return empty();
   try {
     const raw = localStorage.getItem(ALWAYS_KEY);
-    if (raw === null) {
-      const seeded = seed();
-      storeAlwaysAllow(seeded);
-      return seeded;
+    if (raw === null) return empty();
+    const parsed = JSON.parse(raw);
+    const list = parseAlwaysAllow(parsed);
+    if ((parsed as { v?: unknown } | null)?.v !== ALWAYS_VERSION) {
+      const migrated = withoutOldSeed(list);
+      storeAlwaysAllow(migrated);
+      return migrated;
     }
-    return parseAlwaysAllow(JSON.parse(raw));
+    return list;
   } catch {
-    return seed();
+    return empty();
   }
 }
 
 export function storeAlwaysAllow(a: AlwaysAllow): void {
   if (isDemo()) return;
   try {
-    localStorage.setItem(ALWAYS_KEY, JSON.stringify(a));
+    localStorage.setItem(ALWAYS_KEY, JSON.stringify({ apps: a.apps, domains: a.domains, v: ALWAYS_VERSION }));
   } catch {
     /* not persisted */
   }

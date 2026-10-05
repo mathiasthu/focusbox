@@ -78,7 +78,9 @@ describe("defaultAllow (keyword map)", () => {
     expect(defaultAllow("WHMCS ticket").domains).toEqual(["luxvps.net", "billing.luxvps.net"]);
     expect(defaultAllow("LinkedIn connections").domains).toEqual(["linkedin.com"]);
     expect(defaultAllow("clear inbox").domains).toEqual(["mail.google.com"]);
-    expect(defaultAllow("Momentum website copy").domains).toEqual(["momentumminds.net"]);
+    // "website" is both the Momentum site and dev work: it gets both.
+    expect(defaultAllow("Momentum website copy").domains).toEqual(["github.com", "claude.ai", "momentumminds.net"]);
+    expect(defaultAllow("Momentum newsletter").domains).toEqual(["momentumminds.net"]);
     expect(defaultAllow("notion page")).toEqual({ apps: ["notion.id"], domains: ["notion.so"] });
     expect(defaultAllow("todoist cleanup")).toEqual({
       apps: ["com.todoist.mac.Todoist"],
@@ -89,6 +91,27 @@ describe("defaultAllow (keyword map)", () => {
     const a = defaultAllow("deploy luxvps website build");
     expect(a.domains).toEqual(["luxvps.net", "billing.luxvps.net", "github.com", "claude.ai", "momentumminds.net"]);
     expect(new Set(a.apps).size).toBe(a.apps.length);
+  });
+  it("gives dev work the coding tools, by whole word", () => {
+    const fix = defaultAllow("Fix Focusbox crash");
+    expect(fix.apps).toContain("com.anthropic.claudefordesktop");
+    expect(fix.apps).toContain("com.apple.Terminal");
+    for (const t of ["coding session", "dev setup", "ship 0.2.28", "release notes", "repo cleanup", "github issues", "claude prompt", "tauri window", "app store page", "new feature", "website footer"]) {
+      expect(defaultAllow(t).apps).toContain("com.anthropic.claudefordesktop");
+      expect(defaultAllow(t).domains).toEqual(expect.arrayContaining(["github.com", "claude.ai"]));
+    }
+    // Whole words only: these merely contain a keyword.
+    for (const t of ["fixture review", "apples", "shipping labels", "developer survey", "appointment"]) {
+      expect(defaultAllow(t).apps).not.toContain("com.anthropic.claudefordesktop");
+    }
+  });
+  it("gives reading or meditating nothing (no Claude, no claude.ai)", () => {
+    for (const t of ["Read and mediate", "Read and meditate"]) {
+      const a = defaultAllow(t);
+      expect(a.apps).not.toContain("com.anthropic.claudefordesktop");
+      expect(a.domains).not.toContain("claude.ai");
+      expect(mergedAllow(t, {}, getAlwaysAllow())).toEqual({ apps: [], domains: [] });
+    }
   });
   it("is empty for an unknown task", () => {
     expect(defaultAllow("think about pricing")).toEqual({ apps: [], domains: [] });
@@ -264,8 +287,43 @@ describe("normalizeHostname", () => {
 
 describe("always-allowed list", () => {
   beforeEach(() => localStorage.clear());
-  it("is seeded once with Claude, Terminal, iTerm, VS Code and claude.ai, then left alone", () => {
-    expect(getAlwaysAllow()).toEqual(DEFAULT_ALWAYS_ALLOW);
+  it("starts empty on a new install", () => {
+    expect(DEFAULT_ALWAYS_ALLOW).toEqual({ apps: [], domains: [] });
+    expect(getAlwaysAllow()).toEqual({ apps: [], domains: [] });
+  });
+  const OLD_SEEDED = {
+    apps: [
+      { bundleId: "com.anthropic.claudefordesktop", name: "Claude" },
+      { bundleId: "com.apple.Terminal", name: "Terminal" },
+      { bundleId: "com.googlecode.iterm2", name: "iTerm" },
+      { bundleId: "com.microsoft.VSCode", name: "VS Code" },
+    ],
+    domains: ["claude.ai"],
+  };
+  it("migration: a list holding only the old seed becomes empty", () => {
+    localStorage.setItem("focusbox-guard-always-allow", JSON.stringify(OLD_SEEDED));
+    expect(getAlwaysAllow()).toEqual({ apps: [], domains: [] });
+    expect(JSON.parse(localStorage.getItem("focusbox-guard-always-allow")!).v).toBe(2);
+  });
+  it("migration: the user's own additions survive", () => {
+    localStorage.setItem(
+      "focusbox-guard-always-allow",
+      JSON.stringify({
+        apps: [...OLD_SEEDED.apps, { bundleId: "com.tinyspeck.slackmacgap", name: "Slack" }],
+        domains: ["claude.ai", "figma.com"],
+      }),
+    );
+    expect(getAlwaysAllow()).toEqual({
+      apps: [{ bundleId: "com.tinyspeck.slackmacgap", name: "Slack" }],
+      domains: ["figma.com"],
+    });
+  });
+  it("migration runs once: re-adding Claude afterwards sticks", () => {
+    localStorage.setItem("focusbox-guard-always-allow", JSON.stringify(OLD_SEEDED));
+    const migrated = getAlwaysAllow();
+    storeAlwaysAllow(addAlwaysApp(migrated, { bundleId: "com.anthropic.claudefordesktop", name: "Claude" }));
+    expect(getAlwaysAllow().apps.map((a) => a.bundleId)).toEqual(["com.anthropic.claudefordesktop"]);
+    expect(getAlwaysAllow().apps.map((a) => a.bundleId)).toEqual(["com.anthropic.claudefordesktop"]);
     storeAlwaysAllow({ apps: [], domains: [] });
     expect(getAlwaysAllow()).toEqual({ apps: [], domains: [] }); // an emptied list stays empty
   });
