@@ -16,6 +16,12 @@
 
 <img src=".github/media/app-window.png" width="720" alt="The Focusbox window: a depleting focus timer and task list on the left, a clean notes page on the right." />
 
+### See it in 54 seconds
+
+<a href="https://focusbox.net/#film"><img src="media/film-poster.jpg" width="720" alt="Play the 54-second Focusbox film: timer, task list, notes, the macOS focus guard and sync." /></a>
+
+[**▶ Watch the film**](https://focusbox.net/#film) · [Download the MP4](media/focusbox-film.mp4)
+
 </div>
 
 Focusbox is a deliberately small focus app. A countdown to work against, a task
