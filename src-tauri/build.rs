@@ -23,6 +23,7 @@ const COMMANDS: &[&str] = &[
     "todoist_set_token",
     "todoist_clear_token",
     "park",
+    "get_toast_state",
 ];
 
 fn main() {

@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import Nudge from "./components/Nudge";
+import Toast from "./components/Toast";
 import "./styles.css";
 import { applyTheme, getStoredMode } from "./lib/theme";
 import { applyAccent, getStoredAccent } from "./lib/accent";
@@ -12,12 +13,15 @@ applyAccent(getStoredAccent());
 
 // The focus guard's full-screen nudge is a second window onto the same bundle
 // (src-tauri/src/focusguard.rs opens it at index.html?view=nudge).
-const isNudge =
-  "__TAURI_INTERNALS__" in window && new URLSearchParams(window.location.search).get("view") === "nudge";
+// The park confirmation toast is a third (src-tauri/src/toast.rs, index.html?view=toast).
+const view = "__TAURI_INTERNALS__" in window ? new URLSearchParams(window.location.search).get("view") : null;
+const isNudge = view === "nudge";
+const isToast = view === "toast";
 if (isNudge) document.documentElement.classList.add("nudge-root");
+if (isToast) document.documentElement.classList.add("toast-root");
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>{isNudge ? <Nudge /> : <App />}</React.StrictMode>,
+  <React.StrictMode>{isNudge ? <Nudge /> : isToast ? <Toast /> : <App />}</React.StrictMode>,
 );
 
 // Register the service worker on the web only. The Tauri desktop bundle is built

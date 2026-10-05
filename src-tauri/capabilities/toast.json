@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "toast",
+  "description": "Park confirmation toast: read what to show and hear when it is replaced. Nothing else.",
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-get-toast-state"
+  ],
+  "windows": ["toast"]
+}

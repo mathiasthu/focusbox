@@ -1,6 +1,8 @@
 import "./testDomShim";
 import { describe, expect, it, beforeEach } from "vitest";
 import {
+  toastCopy,
+  truncateForToast,
   applyNudgeOpacity,
   getNudgeOpacity,
   nudgeAlphas,
@@ -208,6 +210,28 @@ describe("nudge opacity", () => {
       "--nudge-tint-dark": "65%",
       "--nudge-card": "92%",
     });
+  });
+});
+
+describe("park toast", () => {
+  it("maps each park result to its copy", () => {
+    expect(toastCopy("sent")).toEqual({ title: "Parked in Todoist", ok: true });
+    expect(toastCopy("queued")).toEqual({ title: "Saved, goes to Todoist when you're online", ok: false });
+    expect(toastCopy("no_token")).toEqual({ title: "Saved. Add your Todoist key in Settings", ok: false });
+    expect(toastCopy("auth_blocked")).toEqual({ title: "Todoist key rejected. Saved until fixed", ok: false });
+    expect(toastCopy("rejected").ok).toBe(false);
+    expect(toastCopy("something new").title).toBe("Parked");
+  });
+  it("truncates the parked text to 40 characters with an ellipsis", () => {
+    expect(truncateForToast("  Reply to   Anna  ")).toBe("Reply to Anna");
+    const forty = "x".repeat(40);
+    expect(truncateForToast(forty)).toBe(forty);
+    const long = "Look into the weird caching bug in the sync server tomorrow";
+    const out = truncateForToast(long);
+    expect(out.endsWith("…")).toBe(true);
+    expect([...out].length).toBeLessThanOrEqual(40);
+    expect(out).toBe("Look into the weird caching bug in the…");
+    expect(truncateForToast("😀".repeat(41))).toBe("😀".repeat(39) + "…");
   });
 });
 

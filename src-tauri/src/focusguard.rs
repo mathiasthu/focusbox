@@ -1320,6 +1320,14 @@ fn close_nudge_window<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Put a window at the nudge's level (above the menu bar, on every Space, over full-screen
+/// apps) without ordering it front or making it key. Used by the park toast. No-op off macOS.
+pub(crate) fn raise_webview_window<R: Runtime>(w: &tauri::WebviewWindow<R>) {
+    if let Ok(ns) = w.ns_window_ptr() {
+        unsafe { platform::raise_window(ns) };
+    }
+}
+
 /// `WebviewWindow::ns_window` only exists on macOS; this keeps the call sites portable.
 trait NsWindowPtr {
     fn ns_window_ptr(&self) -> Result<*mut std::ffi::c_void, ()>;
@@ -1462,7 +1470,7 @@ pub async fn nudge_resolve<R: Runtime>(
         }
         (NudgeKind::Drift { app: off, .. }, "park") => {
             let what = text.map(|t| clip(&t)).filter(|t| !t.is_empty()).unwrap_or_else(|| off.label());
-            result = crate::todoist::park_text(&app, &what).await?;
+            result = crate::todoist::park_and_confirm(&app, &what).await?;
             state.log(LogEntry {
                 ts: now_epoch_ms(),
                 kind: "park".into(),

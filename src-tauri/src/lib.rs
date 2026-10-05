@@ -1,6 +1,7 @@
 mod appstore;
 mod focusguard;
 mod spotify;
+mod toast;
 mod todoist;
 
 /// Every app command, in one place so the ACL test below exercises the same list `run()`
@@ -22,7 +23,8 @@ macro_rules! app_commands {
             crate::todoist::todoist_status,
             crate::todoist::todoist_set_token,
             crate::todoist::todoist_clear_token,
-            crate::todoist::park
+            crate::todoist::park,
+            crate::toast::get_toast_state
         ]
     };
 }
@@ -93,7 +95,8 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(appstore::StoreLock::default())
         .manage(std::sync::Arc::new(focusguard::GuardState::default()))
-        .manage(std::sync::Arc::new(todoist::Todoist::default()));
+        .manage(std::sync::Arc::new(todoist::Todoist::default()))
+        .manage(std::sync::Arc::new(toast::ToastState::default()));
 
     // Window-state: desktop-only. Restores the last window position/size on
     // launch and saves it as the window moves/resizes/closes.
@@ -102,7 +105,7 @@ pub fn run() {
     #[cfg(desktop)]
     let builder = builder.plugin(
         tauri_plugin_window_state::Builder::default()
-            .with_denylist(&[focusguard::NUDGE_LABEL])
+            .with_denylist(&[focusguard::NUDGE_LABEL, toast::TOAST_LABEL])
             .build(),
     );
 
@@ -159,11 +162,12 @@ mod acl_tests {
     }
 
     #[test]
-    fn main_and_nudge_windows_get_exactly_their_commands() {
+    fn each_window_gets_exactly_its_commands() {
         let app = mock_builder()
             .manage(crate::appstore::StoreLock::default())
             .manage(Arc::new(crate::focusguard::GuardState::default()))
             .manage(Arc::new(crate::todoist::Todoist::default()))
+            .manage(Arc::new(crate::toast::ToastState::default()))
             .invoke_handler(app_commands!())
             // `test = true` skips the Info.plist embed, which run()'s context already did.
             .build(tauri::generate_context!(test = true))
@@ -211,6 +215,31 @@ mod acl_tests {
             "guard_preview_nudge",
         ] {
             assert!(denied(call(&nudge, cmd)), "nudge must not reach {cmd}");
+        }
+
+        // Toast: only its own payload. Nobody else gets it.
+        let toast = tauri::WebviewWindowBuilder::new(&app, "toast", Default::default()).build().unwrap();
+        assert_eq!(call(&toast, "get_toast_state"), Ok(serde_json::Value::Null));
+        assert!(denied(call(&main, "get_toast_state")));
+        assert!(denied(call(&nudge, "get_toast_state")));
+        for cmd in [
+            "app_store_read",
+            "app_store_write",
+            "guard_supported",
+            "guard_set_config",
+            "guard_stats",
+            "guard_log_newtask",
+            "guard_preview_nudge",
+            "get_nudge_state",
+            "nudge_resolve",
+            "todoist_status",
+            "todoist_set_token",
+            "todoist_clear_token",
+            "park",
+            "spotify_state",
+            "spotify_control",
+        ] {
+            assert!(denied(call(&toast, cmd)), "toast must not reach {cmd}");
         }
     }
 }

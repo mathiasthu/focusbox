@@ -485,6 +485,33 @@ export async function parkTask(text: string): Promise<string> {
   return invoke<string>("park", { text });
 }
 
+/** What the top-of-screen park confirmation says for a park result. */
+export function toastCopy(result: string): { title: string; ok: boolean } {
+  switch (result) {
+    case "sent":
+      return { title: "Parked in Todoist", ok: true };
+    case "queued":
+      return { title: "Saved, goes to Todoist when you're online", ok: false };
+    case "no_token":
+      return { title: "Saved. Add your Todoist key in Settings", ok: false };
+    case "auth_blocked":
+      return { title: "Todoist key rejected. Saved until fixed", ok: false };
+    case "rejected":
+      return { title: "Todoist refused it", ok: false };
+    default:
+      return { title: "Parked", ok: false };
+  }
+}
+
+/** One line of the parked text for the toast: whitespace collapsed, at most `max`
+ * characters (not UTF-16 units), with an ellipsis when cut. */
+export function truncateForToast(text: string, max = 40): string {
+  const clean = text.trim().replace(/\s+/g, " ");
+  const chars = [...clean];
+  if (chars.length <= max) return clean;
+  return chars.slice(0, max - 1).join("").trimEnd() + "…";
+}
+
 export function parkResultMessage(result: string): string {
   switch (result) {
     case "sent":
