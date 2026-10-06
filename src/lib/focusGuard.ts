@@ -661,6 +661,16 @@ export async function guardRunningApps(): Promise<AllowedApp[]> {
   }
 }
 
+/** In a Zoom or Google Meet call right now (false when unknown or unsupported). */
+export async function guardInMeeting(): Promise<boolean> {
+  if (!available()) return false;
+  try {
+    return await invoke<boolean>("guard_in_meeting");
+  } catch {
+    return false;
+  }
+}
+
 /** Settings → "Preview nudge". "ok", or "real_nudge_open" (a real nudge is up and wins). */
 export async function previewNudge(taskText: string, blur: boolean): Promise<string> {
   if (!available()) return "unavailable";

@@ -69,6 +69,41 @@ const BROWSERS: &[(&str, &str)] = &[
     ),
 ];
 
+/// Every tab's URL in every window of a browser, for finding a video call in any tab (not
+/// only the front one). Only ever sent to a browser that is already running, so it never
+/// launches one. osascript prints the nested list flattened as "url, url, url".
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const ALL_TABS_SCRIPTS: &[(&str, &str)] = &[
+    ("com.google.Chrome", "tell application id \"com.google.Chrome\" to get URL of tabs of windows"),
+    (
+        "company.thebrowser.Browser",
+        "tell application id \"company.thebrowser.Browser\" to get URL of tabs of windows",
+    ),
+    ("com.apple.Safari", "tell application id \"com.apple.Safari\" to get URL of tabs of windows"),
+];
+
+/// Zoom starts this helper for the length of a meeting (it hosts the call's capture) and
+/// quits it when the meeting ends, so its presence means "in a Zoom meeting".
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const ZOOM_MEETING_PROCESS: &str = "CptHost";
+
+/// A browser tab that is a video call: a Google Meet room (meet.google.com/abc-defg-hij,
+/// not the Meet home page) or the Zoom web client (zoom.us/wc/...).
+pub fn is_meeting_url(raw: &str) -> bool {
+    let Ok(u) = url::Url::parse(raw.trim()) else { return false };
+    if u.scheme() != "https" && u.scheme() != "http" {
+        return false;
+    }
+    let Some(host) = u.host_str() else { return false };
+    let first = u.path().trim_start_matches('/').split('/').next().unwrap_or("");
+    if host_matches(host, "meet.google.com") {
+        let parts: Vec<&str> = first.split('-').collect();
+        let lens: Vec<usize> = parts.iter().map(|p| p.len()).collect();
+        return lens == [3, 4, 3] && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_lowercase()));
+    }
+    host_matches(host, "zoom.us") && first == "wc"
+}
+
 /// Frontmost while the screen is locked or the screen saver runs: time away, not drift.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const AWAY_BUNDLES: &[&str] = &["com.apple.loginwindow", "com.apple.ScreenSaver.Engine"];
@@ -326,6 +361,9 @@ impl FrontApp {
 pub enum Sample {
     /// Screen locked / screen saver / nothing frontmost: neither on nor off task.
     Away,
+    /// In a Zoom or Google Meet call. The guard stands down completely: any nudge on
+    /// screen closes and nothing counts as off task.
+    Meeting,
     Front(FrontApp),
 }
 
@@ -539,6 +577,14 @@ impl Machine {
 
         match (mode, sample) {
             (Mode::Idle, _) | (_, None) => {}
+            // In a call: never nudge, whatever is in front. A nudge already up goes away,
+            // and the grace period starts fresh once the call ends.
+            (_, Some(Sample::Meeting)) => {
+                if self.nudge.take().is_some() {
+                    out.push(Action::CloseNudge);
+                }
+                self.off_ms = 0;
+            }
             // Locked / screen saver: away. Counters pause; nothing resets.
             (_, Some(Sample::Away)) => {
                 if self.nudge.is_none() {
@@ -733,7 +779,9 @@ mod platform {
     //! (NSWorkspace), the HID idle time (CoreGraphics), power assertions (IOKit) and, for a
     //! supported browser while the user is active, its tab address (osascript). No events
     //! are synthesized; no other app is activated except by the explicit "Back to task".
-    use super::{url_host, FrontApp, Sample, AWAY_BUNDLES, BROWSERS};
+    use super::{
+        is_meeting_url, url_host, FrontApp, Sample, ALL_TABS_SCRIPTS, AWAY_BUNDLES, BROWSERS, ZOOM_MEETING_PROCESS,
+    };
     use objc2::runtime::AnyObject;
     use objc2::rc::Retained;
     use objc2_foundation::{NSArray, NSDictionary, NSNumber};
@@ -963,6 +1011,135 @@ mod platform {
         }
     }
 
+    /// Last call check and when it ran. Reading every tab of every browser is the costly
+    /// part, so the answer is reused for `MEETING_RECHECK`.
+    static MEETING: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
+    const MEETING_RECHECK: Duration = Duration::from_secs(10);
+
+    /// Whether the user is in a Zoom meeting or has a Google Meet / Zoom web call open.
+    pub fn in_meeting() -> bool {
+        if let Ok(c) = MEETING.lock() {
+            if let Some((at, v)) = *c {
+                if at.elapsed() < MEETING_RECHECK {
+                    return v;
+                }
+            }
+        }
+        let v = process_running(ZOOM_MEETING_PROCESS) || objc2::rc::autoreleasepool(|_| meeting_tab_open(mic_users()));
+        if let Ok(mut c) = MEETING.lock() {
+            *c = Some((Instant::now(), v));
+        }
+        v
+    }
+
+    #[repr(C)]
+    struct AudioObjectPropertyAddress {
+        selector: u32,
+        scope: u32,
+        element: u32,
+    }
+    #[link(name = "CoreAudio", kind = "framework")]
+    extern "C" {
+        fn AudioObjectGetPropertyDataSize(
+            id: u32,
+            addr: *const AudioObjectPropertyAddress,
+            qualifier_size: u32,
+            qualifier: *const std::ffi::c_void,
+            out_size: *mut u32,
+        ) -> i32;
+        fn AudioObjectGetPropertyData(
+            id: u32,
+            addr: *const AudioObjectPropertyAddress,
+            qualifier_size: u32,
+            qualifier: *const std::ffi::c_void,
+            io_size: *mut u32,
+            out: *mut std::ffi::c_void,
+        ) -> i32;
+    }
+    const AUDIO_SYSTEM_OBJECT: u32 = 1;
+    const SCOPE_GLOBAL: u32 = u32::from_be_bytes(*b"glob");
+    const PROCESS_OBJECT_LIST: u32 = u32::from_be_bytes(*b"prs#");
+    const PROCESS_PID: u32 = u32::from_be_bytes(*b"ppid");
+    const PROCESS_IS_RUNNING_INPUT: u32 = u32::from_be_bytes(*b"piri");
+
+    fn audio_u32(id: u32, selector: u32) -> Option<u32> {
+        let addr = AudioObjectPropertyAddress { selector, scope: SCOPE_GLOBAL, element: 0 };
+        let mut v: u32 = 0;
+        let mut size = std::mem::size_of::<u32>() as u32;
+        let st = unsafe {
+            AudioObjectGetPropertyData(id, &addr, 0, std::ptr::null(), &mut size, (&mut v as *mut u32).cast())
+        };
+        (st == 0).then_some(v)
+    }
+
+    /// Executable paths of the processes recording from an input device right now
+    /// (CoreAudio's per-process objects, macOS 14.2+; no permission needed). None when
+    /// CoreAudio can't say, so callers fall back to not requiring it.
+    fn mic_users() -> Option<Vec<String>> {
+        let addr = AudioObjectPropertyAddress { selector: PROCESS_OBJECT_LIST, scope: SCOPE_GLOBAL, element: 0 };
+        let mut size: u32 = 0;
+        let st = unsafe { AudioObjectGetPropertyDataSize(AUDIO_SYSTEM_OBJECT, &addr, 0, std::ptr::null(), &mut size) };
+        if st != 0 {
+            return None;
+        }
+        let mut ids = vec![0u32; size as usize / std::mem::size_of::<u32>()];
+        let st = unsafe {
+            AudioObjectGetPropertyData(AUDIO_SYSTEM_OBJECT, &addr, 0, std::ptr::null(), &mut size, ids.as_mut_ptr().cast())
+        };
+        if st != 0 {
+            return None;
+        }
+        ids.truncate(size as usize / std::mem::size_of::<u32>());
+        Some(
+            ids.into_iter()
+                .filter(|&id| audio_u32(id, PROCESS_IS_RUNNING_INPUT).is_some_and(|v| v != 0))
+                .filter_map(|id| audio_u32(id, PROCESS_PID).and_then(|pid| pid_path(pid as i32)))
+                .collect(),
+        )
+    }
+
+    /// Any process with this exact short name (same user's processes; no permission).
+    fn process_running(name: &str) -> bool {
+        let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+        if n <= 0 {
+            return false;
+        }
+        // Room for processes started between the two calls.
+        let mut pids = vec![0i32; n as usize + 64];
+        let bytes = (pids.len() * std::mem::size_of::<i32>()) as i32;
+        let n = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+        if n <= 0 {
+            return false;
+        }
+        pids.truncate((n as usize).min(pids.len()));
+        let mut buf = [0u8; 256];
+        pids.iter().any(|&pid| {
+            let len = unsafe { libc::proc_name(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
+            len > 0 && &buf[..len as usize] == name.as_bytes()
+        })
+    }
+
+    /// A Meet room or Zoom web call open in any tab of a running supported browser, while
+    /// that browser (or one of its helpers, which live inside its .app) uses the mic. The
+    /// mic part stops a tab left open after the call from silencing the guard for the rest
+    /// of the day; Meet keeps the mic open while muted, so a muted call still counts.
+    fn meeting_tab_open(mic: Option<Vec<String>>) -> bool {
+        ALL_TABS_SCRIPTS.iter().any(|(bundle, script)| {
+            let apps = NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(bundle));
+            let Some(app) = apps.firstObject() else { return false };
+            if let Some(users) = &mic {
+                let Some(path) = app.bundleURL().and_then(|u| u.path()).map(|p| p.to_string()) else {
+                    return false;
+                };
+                let prefix = format!("{}/", path.trim_end_matches('/'));
+                if !users.iter().any(|u| u.starts_with(&prefix)) {
+                    return false;
+                }
+            }
+            osascript(script).is_some_and(|out| out.split(", ").any(is_meeting_url))
+        })
+    }
+
     /// The frontmost app, plus the active tab's host for a supported browser.
     /// NSWorkspace needs no permission; the browser read needs Automation consent once.
     ///
@@ -1107,6 +1284,9 @@ mod platform {
 
     pub fn sample(_idle_after_secs: u64) -> Sample {
         Sample::Away
+    }
+    pub fn in_meeting() -> bool {
+        false
     }
     pub fn activate_bundle(_bundle: &str) -> bool {
         false
@@ -1389,7 +1569,12 @@ fn watch<R: Runtime>(app: AppHandle<R>, state: Arc<GuardState>) {
         if nudge_up && !nudge_visible(&app) {
             open_nudge_window(&app);
         }
-        let sample = if mode == Mode::Idle || nudge_up {
+        // The call check runs even with a nudge up, so joining a call clears it.
+        let sample = if mode == Mode::Idle {
+            None
+        } else if platform::in_meeting() {
+            Some(Sample::Meeting)
+        } else if nudge_up {
             None
         } else {
             Some(platform::sample(cfg.idle_after_secs))
@@ -1778,6 +1963,13 @@ pub async fn guard_running_apps() -> Result<Vec<RunningApp>, String> {
     Ok(platform::running_apps())
 }
 
+/// In a Zoom or Google Meet call right now (macOS; always false elsewhere). The main
+/// window holds back its in-app "Start the timer?" prompt while this is true.
+#[tauri::command]
+pub async fn guard_in_meeting() -> Result<bool, String> {
+    Ok(platform::in_meeting())
+}
+
 /// Settings → "Preview nudge": show the real nudge window with a demo payload, using the
 /// given blur setting. Main window only (see capabilities). Returns "ok", or
 /// "real_nudge_open" when a real nudge is up (it is left alone).
@@ -2020,6 +2212,47 @@ mod tests {
 
     fn opened(actions: &[Action]) -> usize {
         actions.iter().filter(|a| matches!(a, Action::OpenNudge(_))).count()
+    }
+
+    // --- video calls ---
+
+    #[test]
+    fn meeting_urls_are_meet_rooms_and_the_zoom_web_client() {
+        assert!(is_meeting_url("https://meet.google.com/abc-defg-hij"));
+        assert!(is_meeting_url("https://meet.google.com/abc-defg-hij?authuser=1"));
+        assert!(is_meeting_url(" https://meet.google.com/abc-defg-hij/ "));
+        assert!(!is_meeting_url("https://meet.google.com/"), "the Meet home page is not a call");
+        assert!(!is_meeting_url("https://meet.google.com/landing"));
+        assert!(!is_meeting_url("https://meet.google.com/ab-defg-hij"));
+        assert!(!is_meeting_url("https://notmeet.google.com.evil.io/abc-defg-hij"));
+        assert!(is_meeting_url("https://app.zoom.us/wc/123456789/join"));
+        assert!(is_meeting_url("https://us02web.zoom.us/wc/123456789/start"));
+        assert!(!is_meeting_url("https://zoom.us/j/123456789"), "the join page hands off to the app");
+        assert!(!is_meeting_url("https://notzoom.us/wc/1"));
+        assert!(!is_meeting_url("missing value"));
+        assert!(!is_meeting_url(""));
+    }
+
+    #[test]
+    fn a_call_never_nudges_and_clears_a_nudge_on_screen() {
+        let c = cfg();
+        let mut m = Machine::default();
+        // Off task for well past the grace period, but in a call: nothing opens.
+        let mut t = 0;
+        while t <= 120_000 {
+            assert_eq!(opened(&m.step(&c, Mode::Guard, Some(&Sample::Meeting), t)), 0);
+            t += 2000;
+        }
+        // A real drift nudge, then the call starts: it closes.
+        let a = run(&mut m, &c, &app("com.apple.Music", None), 122_000, 160_000);
+        assert_eq!(opened(&a), 1);
+        assert!(m.nudge().is_some());
+        let a = m.step(&c, Mode::Guard, Some(&Sample::Meeting), 162_000);
+        assert!(a.contains(&Action::CloseNudge));
+        assert!(m.nudge().is_none());
+        // After the call the full grace period applies again.
+        let a = run(&mut m, &c, &app("com.apple.Music", None), 164_000, 164_000 + 26_000);
+        assert_eq!(opened(&a), 0);
     }
 
     // --- domain matching ---

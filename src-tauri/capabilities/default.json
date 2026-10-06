@@ -32,6 +32,7 @@
     "allow-guard-stats",
     "allow-guard-preview-nudge",
     "allow-guard-running-apps",
+    "allow-guard-in-meeting",
     "allow-todoist-status",
     "allow-todoist-set-token",
     "allow-todoist-clear-token",

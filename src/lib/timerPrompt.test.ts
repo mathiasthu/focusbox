@@ -1,11 +1,15 @@
 import "./testDomShim";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  getPromptUsedDay,
   getRemindStart,
+  localDay,
+  msUntilNextDay,
   msUntilStartPrompt,
   nextIdleSince,
   shouldShowStartPrompt,
   START_PROMPT_DELAY_MS,
+  storePromptUsedDay,
   storeRemindStart,
   type StartPromptInput,
 } from "./timerPrompt";
@@ -15,7 +19,8 @@ const base = (over: Partial<StartPromptInput> = {}): StartPromptInput => ({
   cardKey: "read the rfc",
   timerStatus: "set timer",
   idleSince: { key: "read the rfc", since: 1000 },
-  dismissedKey: null,
+  usedDay: null,
+  inMeeting: false,
   now: 1000 + START_PROMPT_DELAY_MS,
   ...over,
 });
@@ -35,9 +40,16 @@ describe("shouldShowStartPrompt", () => {
       expect(shouldShowStartPrompt(base({ timerStatus: s }))).toBe(false);
     }
   });
-  it("'Not now' hides it for that card only", () => {
-    expect(shouldShowStartPrompt(base({ dismissedKey: "read the rfc" }))).toBe(false);
-    expect(shouldShowStartPrompt(base({ dismissedKey: "another card" }))).toBe(true);
+  it("asks once a day: used today hides it for every card until tomorrow", () => {
+    const today = localDay(base().now);
+    expect(shouldShowStartPrompt(base({ usedDay: today }))).toBe(false);
+    expect(shouldShowStartPrompt(base({ usedDay: today, cardKey: "another card", idleSince: { key: "another card", since: 1000 } }))).toBe(false);
+    expect(shouldShowStartPrompt(base({ usedDay: "1999-01-01" }))).toBe(true);
+    const tomorrow = base().now + msUntilNextDay(base().now);
+    expect(shouldShowStartPrompt(base({ usedDay: today, now: tomorrow }))).toBe(true);
+  });
+  it("stays away during a Zoom / Meet call", () => {
+    expect(shouldShowStartPrompt(base({ inMeeting: true }))).toBe(false);
   });
   it("the idle clock must belong to the current card", () => {
     expect(shouldShowStartPrompt(base({ idleSince: { key: "old card", since: 0 } }))).toBe(false);
@@ -47,7 +59,18 @@ describe("shouldShowStartPrompt", () => {
     expect(msUntilStartPrompt(base({ now: 1000 }))).toBe(20_000);
     expect(msUntilStartPrompt(base({ now: 1000 + 25_000 }))).toBe(0);
     expect(msUntilStartPrompt(base({ timerStatus: "focusing" }))).toBeNull();
-    expect(msUntilStartPrompt(base({ dismissedKey: "read the rfc" }))).toBeNull();
+    // Used today: not before the next local midnight.
+    const now = new Date(2026, 9, 6, 15, 0).getTime();
+    const used = base({ now, idleSince: { key: "read the rfc", since: now }, usedDay: localDay(now) });
+    expect(msUntilStartPrompt(used)).toBe(9 * 3_600_000);
+  });
+});
+
+describe("localDay / msUntilNextDay", () => {
+  it("uses the local calendar day", () => {
+    expect(localDay(new Date(2026, 0, 5, 23, 59).getTime())).toBe("2026-01-05");
+    expect(localDay(new Date(2026, 0, 6, 0, 0).getTime())).toBe("2026-01-06");
+    expect(msUntilNextDay(new Date(2026, 0, 5, 23, 0).getTime())).toBe(3_600_000);
   });
 });
 
@@ -76,5 +99,10 @@ describe("Remind me to start the timer (device-local)", () => {
     expect(getRemindStart()).toBe(false);
     storeRemindStart(true);
     expect(getRemindStart()).toBe(true);
+  });
+  it("remembers the day it was used across restarts", () => {
+    expect(getPromptUsedDay()).toBeNull();
+    storePromptUsedDay("2026-10-06");
+    expect(getPromptUsedDay()).toBe("2026-10-06");
   });
 });

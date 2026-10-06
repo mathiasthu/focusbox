@@ -21,6 +21,7 @@ macro_rules! app_commands {
             crate::focusguard::guard_stats,
             crate::focusguard::guard_preview_nudge,
             crate::focusguard::guard_running_apps,
+            crate::focusguard::guard_in_meeting,
             crate::todoist::todoist_status,
             crate::todoist::todoist_set_token,
             crate::todoist::todoist_clear_token,
@@ -229,6 +230,7 @@ mod acl_tests {
             "guard_log_newtask",
             "guard_preview_nudge",
             "guard_running_apps",
+            "guard_in_meeting",
         ] {
             assert!(denied(call(&nudge, cmd)), "nudge must not reach {cmd}");
         }
@@ -255,6 +257,7 @@ mod acl_tests {
             "spotify_state",
             "spotify_control",
             "guard_running_apps",
+            "guard_in_meeting",
         ] {
             assert!(denied(call(&toast, cmd)), "toast must not reach {cmd}");
         }

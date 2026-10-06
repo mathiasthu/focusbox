@@ -275,7 +275,8 @@ export default function Settings({
           </div>
           <span className="setting__hint">
             When a Focus task is set but the timer isn't running, asks here in Focusbox after a few
-            seconds. Never pops up over other apps.
+            seconds, once a day. Never pops up over other apps, and stays quiet during Zoom and
+            Google Meet calls.
           </span>
         </div>
 

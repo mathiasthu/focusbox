@@ -3,10 +3,13 @@ import type { Editor } from "@tiptap/react";
 import Timer, { type TimerHandle } from "./components/Timer";
 import StartTimerPrompt from "./components/StartTimerPrompt";
 import {
+  getPromptUsedDay,
   getRemindStart,
+  localDay,
   msUntilStartPrompt,
   nextIdleSince,
   shouldShowStartPrompt,
+  storePromptUsedDay,
   storeRemindStart,
   type IdleSince,
 } from "./lib/timerPrompt";
@@ -85,6 +88,7 @@ import {
   normalizeTaskKey,
   type AllowOverrides,
   type GuardPrefs,
+  guardInMeeting,
 } from "./lib/focusGuard";
 
 export default function App() {
@@ -119,7 +123,8 @@ export default function App() {
   const timerRef = useRef<TimerHandle>(null);
   const [remindStart, setRemindStart] = useState<boolean>(getRemindStart);
   const [idleSince, setIdleSince] = useState<IdleSince | null>(null);
-  const [startDismissedKey, setStartDismissedKey] = useState<string | null>(null);
+  const [promptUsedDay, setPromptUsedDay] = useState<string | null>(getPromptUsedDay);
+  const [inMeeting, setInMeeting] = useState(false);
   const [promptNow, setPromptNow] = useState(() => Date.now());
   // Focus guard (macOS desktop only). Device-local, never synced — see focusGuard.ts.
   const [guardSupported, setGuardSupported] = useState(false);
@@ -286,19 +291,46 @@ export default function App() {
   useEffect(() => {
     setIdleSince((prev) => nextIdleSince(prev, startCardKey, timerStatus, Date.now()));
   }, [startCardKey, timerStatus]);
-  // "Not now" lasts until the card changes.
-  useEffect(() => {
-    setStartDismissedKey((k) => (k !== null && k !== startCardKey ? null : k));
-  }, [startCardKey]);
   const startPromptInput = {
     enabled: remindStart && !mobileWeb,
     cardKey: startCardKey,
     timerStatus,
     idleSince,
-    dismissedKey: startDismissedKey,
+    usedDay: promptUsedDay,
+    inMeeting,
     now: promptNow,
   };
   const startPromptVisible = shouldShowStartPrompt(startPromptInput);
+  // Once a day: when it has been on screen and goes away (Start timer, Not now, the timer
+  // started elsewhere, the card changed), it is used up until tomorrow. A call hiding it
+  // doesn't count.
+  const markPromptUsed = useCallback(() => {
+    const today = localDay(Date.now());
+    setPromptUsedDay(today);
+    storePromptUsedDay(today);
+  }, []);
+  const promptWasVisible = useRef(false);
+  useEffect(() => {
+    if (promptWasVisible.current && !startPromptVisible && !inMeeting) markPromptUsed();
+    promptWasVisible.current = startPromptVisible;
+  }, [startPromptVisible, inMeeting, markPromptUsed]);
+  // In a Zoom / Meet call it holds back. Asked only while it is about to show (or showing),
+  // then every 30s, so nothing polls when it couldn't appear anyway.
+  const startPromptDue = shouldShowStartPrompt({ ...startPromptInput, inMeeting: false });
+  useEffect(() => {
+    if (!startPromptDue || !guardSupported) {
+      setInMeeting(false);
+      return;
+    }
+    let live = true;
+    const check = () => void guardInMeeting().then((m) => live && setInMeeting(m));
+    check();
+    const t = window.setInterval(check, 30_000);
+    return () => {
+      live = false;
+      window.clearInterval(t);
+    };
+  }, [startPromptDue, guardSupported]);
   // One timer to re-render when the 20s are up (nothing else ticks while the timer is idle).
   const startPromptWait = msUntilStartPrompt({ ...startPromptInput, now: Date.now() });
   useEffect(() => {
@@ -607,7 +639,7 @@ export default function App() {
         {startPromptVisible && (
           <StartTimerPrompt
             onStart={() => timerRef.current?.start()}
-            onDismiss={() => setStartDismissedKey(startCardKey)}
+            onDismiss={markPromptUsed}
           />
         )}
         {(lineDragging || focusTask) && (
