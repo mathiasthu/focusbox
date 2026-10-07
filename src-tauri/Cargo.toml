@@ -1,6 +1,6 @@
 [package]
 name = "focusbox"
-version = "0.2.30"
+version = "0.2.31"
 description = "Minimal countdown timer + tasks + notes"
 authors = ["you"]
 edition = "2021"
