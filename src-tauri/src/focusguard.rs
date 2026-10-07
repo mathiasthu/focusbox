@@ -4,12 +4,12 @@
 //! Why this lives in Rust and not in the main webview: the webview's timers are throttled
 //! (or stopped outright) while its window is hidden or occluded, which is exactly when the
 //! guard has to keep working. So the frontend only pushes *facts* (is the guard on, what is
-//! the Focus task, is the timer running, the allow-list, the workday window) through
+//! the Focus task, is the timer running, the allow-list) through
 //! `guard_set_config`, and a plain OS thread here does the sampling and the counting.
 //!
 //! Layout of this file:
 //! - pure logic, unit-tested, no clock and no OS: [`GuardConfig`], [`mode_for`],
-//!   [`in_workday`], domain matching, and the drift state machine [`Machine`];
+//!   domain matching, and the drift state machine [`Machine`];
 //! - the event log (JSONL in the app data dir) used for the stats view;
 //! - the macOS platform layer (frontmost app via NSWorkspace, the active browser tab via
 //!   `osascript`, re-activating an app, raising the nudge window), with no-op fallbacks so
@@ -23,7 +23,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, Datelike, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
@@ -121,6 +120,8 @@ pub enum TimerState {
     Idle,
 }
 
+/// Whole-workday mode. No longer used (2026-10-07: a paused timer is never guarded), but
+/// still accepted so older main windows that send it keep deserializing.
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Workday {
@@ -147,8 +148,8 @@ impl Default for Workday {
 }
 
 /// What the main window knows and the watcher needs. Rust derives the guard's mode from
-/// this plus the clock, rather than the frontend sending an "active" flag, because the
-/// workday window opens and closes on its own while the webview may be throttled.
+/// this plus the clock (for "Pause guard"), rather than the frontend sending an "active"
+/// flag, because the pause runs out on its own while the webview may be throttled.
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct GuardConfig {
@@ -202,35 +203,32 @@ pub enum Mode {
     Guard,
 }
 
-/// The guard's mode for a config and whether "now" is inside the workday window.
+/// The guard's mode for a config.
 ///
 /// - Off: idle.
 /// - A Focus task with the timer running: guard.
-/// - Inside the workday window: a Focus task with the timer paused is still guarded.
-/// - Anything else is idle. In particular there is no prompt when no task or no timer is
-///   running: the owner asked for no on-screen "start a task" nagging (2026-10-05). A Focus
-///   card with an idle timer gets a quiet in-app reminder in the main window instead
-///   (src/lib/timerPrompt.ts).
-pub fn mode_for(cfg: &GuardConfig, in_window: bool) -> Mode {
-    if !cfg.enabled {
-        return Mode::Idle;
+/// - Anything else is idle:
+///   - A paused timer is never guarded. Pausing is how the owner says "I'm doing something
+///     else now" (2026-10-07), so drifting then is not drift. This replaced whole-workday
+///     mode, which kept a paused task guarded during work hours.
+///   - No task or no timer running gets no on-screen "start a task" prompt (2026-10-05).
+///     A Focus card with an idle timer gets a quiet in-app reminder in the main window
+///     instead (src/lib/timerPrompt.ts).
+pub fn mode_for(cfg: &GuardConfig) -> Mode {
+    if cfg.enabled && cfg.has_task && cfg.timer == TimerState::Running {
+        Mode::Guard
+    } else {
+        Mode::Idle
     }
-    if cfg.has_task && cfg.timer == TimerState::Running {
-        return Mode::Guard;
-    }
-    if cfg.workday.enabled && in_window && cfg.has_task && cfg.timer == TimerState::Paused {
-        return Mode::Guard;
-    }
-    Mode::Idle
 }
 
 /// `mode_for`, with "Pause guard" applied: while `now_epoch_ms < paused_until` the guard is
 /// idle. Evaluated every tick, so it resumes by itself.
-pub fn effective_mode(cfg: &GuardConfig, in_window: bool, now_epoch_ms: u64) -> Mode {
+pub fn effective_mode(cfg: &GuardConfig, now_epoch_ms: u64) -> Mode {
     if now_epoch_ms < cfg.paused_until {
         Mode::Idle
     } else {
-        mode_for(cfg, in_window)
+        mode_for(cfg)
     }
 }
 
@@ -239,44 +237,6 @@ pub fn effective_mode(cfg: &GuardConfig, in_window: bool, now_epoch_ms: u64) -> 
 pub fn pause_started(old_until: u64, new_until: u64, now_epoch_ms: u64) -> Option<u64> {
     (new_until > now_epoch_ms && new_until > old_until.max(now_epoch_ms))
         .then(|| (new_until - now_epoch_ms) / 1000)
-}
-
-fn parse_hhmm(s: &str) -> Option<u32> {
-    let (h, m) = s.trim().split_once(':')?;
-    let h: u32 = h.trim().parse().ok()?;
-    let m: u32 = m.trim().parse().ok()?;
-    (h < 24 && m < 60).then_some(h * 60 + m)
-}
-
-/// Whether `now` falls inside the workday window, evaluated in the window's own zone.
-/// An end earlier than the start is an overnight window; equal start and end is empty.
-pub fn in_workday(w: &Workday, now: DateTime<Utc>) -> bool {
-    if !w.enabled {
-        return false;
-    }
-    let (Some(start), Some(end)) = (parse_hhmm(&w.start), parse_hhmm(&w.end)) else {
-        return false;
-    };
-    let (weekday, minute) = match w.tz.trim().parse::<chrono_tz::Tz>() {
-        Ok(tz) => {
-            let t = now.with_timezone(&tz);
-            (t.weekday().number_from_monday(), t.hour() * 60 + t.minute())
-        }
-        Err(_) => {
-            let t = now.with_timezone(&chrono::Local);
-            (t.weekday().number_from_monday(), t.hour() * 60 + t.minute())
-        }
-    };
-    if !w.days.contains(&weekday) {
-        return false;
-    }
-    if start < end {
-        minute >= start && minute < end
-    } else if start > end {
-        minute >= start || minute < end
-    } else {
-        false
-    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1558,7 +1518,7 @@ fn watch<R: Runtime>(app: AppHandle<R>, state: Arc<GuardState>) {
         let (cfg, mode) = {
             let Ok(inner) = state.inner.lock() else { return };
             let cfg = inner.effective_cfg();
-            let mode = effective_mode(&cfg, in_workday(&cfg.workday, Utc::now()), now_epoch_ms());
+            let mode = effective_mode(&cfg, now_epoch_ms());
             (cfg, mode)
         };
         // Sample outside the lock: the browser read can take up to 1.5s.
@@ -2152,7 +2112,6 @@ pub async fn guard_stats(state: State<'_, Arc<GuardState>>, days: u32) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
 
     fn cfg() -> GuardConfig {
         GuardConfig {
@@ -2204,7 +2163,7 @@ mod tests {
         let mut out = Vec::new();
         let mut t = from;
         while t <= to {
-            out.extend(m.step(c, mode_for(c, false), Some(s), t));
+            out.extend(m.step(c, mode_for(c), Some(s), t));
             t += 2000;
         }
         out
@@ -2316,70 +2275,24 @@ mod tests {
     // --- mode ---
 
     #[test]
-    fn mode_follows_timer_task_and_workday() {
+    fn only_a_running_timer_is_guarded() {
         let mut c = cfg();
-        assert_eq!(mode_for(&c, false), Mode::Guard);
+        assert_eq!(mode_for(&c), Mode::Guard);
+        // Paused = doing something else on purpose, workday mode or not.
         c.timer = TimerState::Paused;
-        assert_eq!(mode_for(&c, false), Mode::Idle);
+        assert_eq!(mode_for(&c), Mode::Idle);
         c.workday.enabled = true;
-        assert_eq!(mode_for(&c, false), Mode::Idle, "outside the window a paused timer is idle");
-        assert_eq!(mode_for(&c, true), Mode::Guard, "inside the window a paused task is guarded");
-        // No on-screen "start a task" prompt any more: inside the window, a card whose
-        // timer was never started, or no card at all, is simply idle.
+        assert_eq!(mode_for(&c), Mode::Idle, "the old workday mode no longer guards a paused task");
+        // No on-screen "start a task" prompt: a card whose timer was never started, or no
+        // card at all, is simply idle.
         c.timer = TimerState::Idle;
-        assert_eq!(mode_for(&c, true), Mode::Idle);
+        assert_eq!(mode_for(&c), Mode::Idle);
         c.has_task = false;
         c.timer = TimerState::Running;
-        assert_eq!(mode_for(&c, true), Mode::Idle);
-        assert_eq!(mode_for(&c, false), Mode::Idle);
+        assert_eq!(mode_for(&c), Mode::Idle);
+        c.has_task = true;
         c.enabled = false;
-        assert_eq!(mode_for(&c, true), Mode::Idle);
-    }
-
-    // --- workday window ---
-
-    fn wd() -> Workday {
-        Workday { enabled: true, ..Workday::default() }
-    }
-
-    #[test]
-    fn workday_window_in_bangkok() {
-        // Bangkok is UTC+7, no DST. 2026-10-05 is a Monday.
-        let at = |y, mo, d, h, mi| Utc.with_ymd_and_hms(y, mo, d, h, mi, 0).unwrap();
-        assert!(in_workday(&wd(), at(2026, 10, 5, 3, 0)), "Mon 10:00 local is in");
-        assert!(!in_workday(&wd(), at(2026, 10, 5, 2, 59)), "Mon 09:59 local is out");
-        assert!(in_workday(&wd(), at(2026, 10, 5, 11, 59)), "Mon 18:59 local is in");
-        assert!(!in_workday(&wd(), at(2026, 10, 5, 12, 0)), "Mon 19:00 local is out (end exclusive)");
-        assert!(in_workday(&wd(), at(2026, 10, 10, 5, 0)), "Saturday is a workday");
-        assert!(!in_workday(&wd(), at(2026, 10, 11, 5, 0)), "Sunday is not");
-        // Sunday 23:30 UTC is already Monday 06:30 in Bangkok: out, but because of the hour.
-        assert!(!in_workday(&wd(), at(2026, 10, 4, 23, 30)));
-        // Saturday 20:00 UTC = Sunday 03:00 local: the local day decides.
-        let mut w = wd();
-        w.start = "00:00".into();
-        w.end = "23:59".into();
-        assert!(!in_workday(&w, at(2026, 10, 10, 20, 0)));
-    }
-
-    #[test]
-    fn workday_disabled_bad_times_and_overnight() {
-        let at = Utc.with_ymd_and_hms(2026, 10, 5, 5, 0, 0).unwrap(); // Mon 12:00 BKK
-        let mut w = wd();
-        w.enabled = false;
-        assert!(!in_workday(&w, at));
-        let mut w = wd();
-        w.start = "nope".into();
-        assert!(!in_workday(&w, at));
-        let mut w = wd();
-        w.start = "22:00".into();
-        w.end = "02:00".into();
-        assert!(!in_workday(&w, at));
-        let late = Utc.with_ymd_and_hms(2026, 10, 5, 16, 0, 0).unwrap(); // Mon 23:00 BKK
-        assert!(in_workday(&w, late));
-        let mut w = wd();
-        w.start = "10:00".into();
-        w.end = "10:00".into();
-        assert!(!in_workday(&w, at), "an empty window is never in");
+        assert_eq!(mode_for(&c), Mode::Idle);
     }
 
     // --- drift state machine ---
@@ -2520,44 +2433,42 @@ mod tests {
     }
 
     #[test]
-    fn workday_mode_never_opens_a_nudge_without_a_running_or_paused_task() {
-        // The old "No task running" full-screen prompt is gone: a whole workday with no
-        // card, or a card whose timer was never started, opens nothing and logs nothing.
-        for (has_task, timer) in [(false, TimerState::Idle), (false, TimerState::Running), (true, TimerState::Idle)] {
+    fn nothing_opens_unless_the_timer_runs() {
+        // No card, a card whose timer was never started, or a paused timer (workday mode
+        // or not): an hour on YouTube opens nothing and logs nothing.
+        for (has_task, timer, workday) in [
+            (false, TimerState::Idle, true),
+            (false, TimerState::Running, true),
+            (true, TimerState::Idle, true),
+            (true, TimerState::Paused, false),
+            (true, TimerState::Paused, true),
+        ] {
             let mut c = cfg();
             c.has_task = has_task;
             c.timer = timer;
-            c.workday.enabled = true;
+            c.workday.enabled = workday;
             let mut m = Machine::default();
             let any = app("com.google.Chrome", Some("youtube.com"));
             let mut t = 0;
             while t <= 60 * 60_000 {
-                let mode = mode_for(&c, true);
+                let mode = mode_for(&c);
                 let a = m.step(&c, mode, if mode == Mode::Idle { None } else { Some(&any) }, t);
-                assert!(a.is_empty(), "{has_task} {timer:?}: {a:?}");
+                assert!(a.is_empty(), "{has_task} {timer:?} {workday}: {a:?}");
                 t += 2000;
             }
         }
     }
 
     #[test]
-    fn workday_mode_still_guards_a_paused_task() {
+    fn pausing_closes_an_open_drift_nudge() {
         let mut c = cfg();
-        c.timer = TimerState::Paused;
-        c.workday.enabled = true;
         let mut m = Machine::default();
-        let a = run_in_window(&mut m, &c, &app("com.google.Chrome", Some("youtube.com")), 0, 30_000);
+        let a = run(&mut m, &c, &app("com.google.Chrome", Some("youtube.com")), 0, 30_000);
         assert_eq!(opened(&a), 1);
-    }
-
-    fn run_in_window(m: &mut Machine, c: &GuardConfig, s: &Sample, from: u64, to: u64) -> Vec<Action> {
-        let mut out = Vec::new();
-        let mut t = from;
-        while t <= to {
-            out.extend(m.step(c, mode_for(c, true), Some(s), t));
-            t += 2000;
-        }
-        out
+        c.timer = TimerState::Paused;
+        let a = m.step(&c, mode_for(&c), None, 32_000);
+        assert!(a.contains(&Action::CloseNudge));
+        assert!(m.nudge().is_none());
     }
 
     #[test]
@@ -2793,7 +2704,7 @@ mod tests {
         let mut logged = 0;
         let mut t = 0;
         while t <= 200_000 && opened_at.is_none() {
-            let mode = effective_mode(&c, false, epoch + t);
+            let mode = effective_mode(&c, epoch + t);
             let a = m.step(&c, mode, if mode == Mode::Idle { None } else { Some(&yt) }, t);
             logged += a.iter().filter(|x| matches!(x, Action::Focused { .. } | Action::Away { .. })).count();
             if opened(&a) > 0 {
@@ -2846,7 +2757,7 @@ mod tests {
         // First push of the run: restoring a pause that started before the restart.
         let first = inner.apply_config(c.clone(), now);
         assert_eq!(first.pause_started, None);
-        assert_eq!(effective_mode(&inner.cfg, false, now), Mode::Idle, "but it is honoured");
+        assert_eq!(effective_mode(&inner.cfg, now), Mode::Idle, "but it is honoured");
         // The same pause pushed again: nothing new.
         assert_eq!(inner.apply_config(c.clone(), now + 1000).pause_started, None);
         // Resume, then a real new pause: logged.
@@ -2929,15 +2840,10 @@ mod tests {
     fn effective_mode_is_idle_only_until_the_pause_ends() {
         let mut c = cfg();
         c.paused_until = 5_000;
-        assert_eq!(effective_mode(&c, false, 4_999), Mode::Idle);
-        assert_eq!(effective_mode(&c, false, 5_000), Mode::Guard);
+        assert_eq!(effective_mode(&c, 4_999), Mode::Idle);
+        assert_eq!(effective_mode(&c, 5_000), Mode::Guard);
         c.paused_until = 0;
-        assert_eq!(effective_mode(&c, false, 1), Mode::Guard);
-        c.workday.enabled = true;
-        c.timer = TimerState::Paused;
-        c.paused_until = 10;
-        assert_eq!(effective_mode(&c, true, 5), Mode::Idle, "the workday guard pauses too");
-        assert_eq!(effective_mode(&c, true, 10), Mode::Guard);
+        assert_eq!(effective_mode(&c, 1), Mode::Guard);
     }
 
     #[test]

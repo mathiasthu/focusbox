@@ -395,8 +395,6 @@ function NudgeLook({ prefs, onChange, previewTask }: Pick<Props, "prefs" | "onCh
 
 export default function FocusGuardSettings({ prefs, onChange, onOpenStats, previewTask, extras }: Props) {
   const set = (patch: Partial<GuardPrefs>) => onChange({ ...prefs, ...patch });
-  const setWorkday = (patch: Partial<GuardPrefs["workday"]>) =>
-    onChange({ ...prefs, workday: { ...prefs.workday, ...patch } });
 
   return (
     <div className="setting setting--col guard-settings">
@@ -406,7 +404,7 @@ export default function FocusGuardSettings({ prefs, onChange, onOpenStats, previ
       </div>
       <span className="setting__hint">
         While a Focus task's timer runs, a full-screen reminder appears if you stay in an app or site
-        that isn't part of the task. Applies to this Mac only.
+        that isn't part of the task. Pause the timer and it leaves you alone. Applies to this Mac only.
       </span>
 
       {prefs.enabled && (
@@ -458,54 +456,6 @@ export default function FocusGuardSettings({ prefs, onChange, onOpenStats, previ
               onChange={(v) => set({ blockCompletely: v })}
             />
           </div>
-
-          <div className="setting__row">
-            <span className="guard-settings__label">Whole-workday mode</span>
-            <OnOff
-              label="Whole-workday mode"
-              value={prefs.workday.enabled}
-              onChange={(v) => setWorkday({ enabled: v })}
-            />
-          </div>
-          {prefs.workday.enabled && (
-            <>
-              <div className="guard-settings__workday">
-                <label>
-                  From
-                  <input
-                    className="account__input"
-                    type="time"
-                    value={prefs.workday.start}
-                    onChange={(e) => e.target.value && setWorkday({ start: e.target.value })}
-                  />
-                </label>
-                <label>
-                  To
-                  <input
-                    className="account__input"
-                    type="time"
-                    value={prefs.workday.end}
-                    onChange={(e) => e.target.value && setWorkday({ end: e.target.value })}
-                  />
-                </label>
-                <label className="guard-settings__tz">
-                  Time zone
-                  <input
-                    className="account__input"
-                    type="text"
-                    spellCheck={false}
-                    value={prefs.workday.tz}
-                    onChange={(e) => setWorkday({ tz: e.target.value })}
-                    onBlur={(e) => !e.target.value.trim() && setWorkday({ tz: "Asia/Bangkok" })}
-                  />
-                </label>
-              </div>
-              <span className="setting__hint">
-                Monday to Saturday. During these hours a Focus task stays guarded even with the timer
-                paused. It never pops up to ask you to start a task.
-              </span>
-            </>
-          )}
         </>
       )}
 

@@ -1749,23 +1749,6 @@ body::after {
   font-size: 13.5px;
   color: var(--ink-soft);
 }
-.guard-settings__workday {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  width: 100%;
-}
-.guard-settings__workday label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--ink-faint);
-  flex: 1 1 90px;
-}
-.guard-settings__workday .guard-settings__tz {
-  flex: 2 1 160px;
-}
 .guard-settings__todoist {
   display: flex;
   flex-direction: column;

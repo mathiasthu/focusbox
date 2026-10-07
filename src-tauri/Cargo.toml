@@ -35,8 +35,6 @@ tauri-plugin-process = "2"
 # and the whole-workday window in the user's chosen time zone.
 uuid = { version = "1", features = ["v4"] }
 url = "2"
-chrono = "0.4"
-chrono-tz = "0.10"
 
 # Focus guard (macOS only): frontmost-app sampling, re-activating the on-task app, and
 # raising the nudge window above the menu bar. Versions match what tauri already pulls in.
