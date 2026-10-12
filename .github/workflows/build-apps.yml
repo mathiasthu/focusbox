@@ -116,6 +116,34 @@ jobs:
       - name: Install Tauri CLI
         run: npm ci --ignore-scripts
 
+      # Self-signed code signing (free, not Apple-trusted). It gives the app a stable
+      # designated requirement (bundle id + certificate), so macOS privacy grants such as
+      # Automation for reading browser tabs survive updates. Ad-hoc builds got a new
+      # identity every release, which silently dropped the grant (2026-10-12). Without the
+      # secrets the build stays ad-hoc, as before.
+      - name: Import macOS signing certificate
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          if [ -z "$MACOS_CERT_P12" ]; then
+            echo "::warning::MACOS_CERT_P12 not set; building ad-hoc signed"
+            exit 0
+          fi
+          KC="$RUNNER_TEMP/focusbox-sign.keychain-db"
+          KC_PW="$(openssl rand -hex 16)"
+          printf '%s' "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KC_PW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KC_PW" "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PW" "$KC" > /dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security find-identity -p codesigning "$KC"
+          echo "APPLE_SIGNING_IDENTITY=Focusbox Self-Signed" >> "$GITHUB_ENV"
+
       - name: Build (+ publish Release on tag) with signed updater artifacts
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
