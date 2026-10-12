@@ -298,6 +298,10 @@ pub struct FrontApp {
     pub name: String,
     /// Active tab host, only for a supported browser whose tab could be read.
     pub domain: Option<String>,
+    /// A supported browser is in front but its tab couldn't be read: Automation access
+    /// was denied (macOS drops it when an update changes the app's signature) or the read
+    /// timed out. On or off task can't be told, so it isn't counted as drift.
+    pub tab_unreadable: bool,
     /// The frontmost process is this one (covers the dev build, which has no bundle id).
     pub is_self: bool,
     /// Seconds since the last real (HID) keyboard/mouse/trackpad input.
@@ -401,6 +405,9 @@ pub fn is_on_task(cfg: &GuardConfig, app: &FrontApp) -> bool {
         {
             return true;
         }
+    }
+    if app.tab_unreadable {
+        return true;
     }
     match &app.domain {
         Some(host) => cfg.allow_domains.iter().any(|p| host_matches(host, p)),
@@ -779,7 +786,15 @@ mod platform {
     /// Last tab host read per frontmost pid. While the user is idle the browser isn't
     /// queried (no point poking it, and its tab can't have changed by the user's hand), so
     /// the last known host stands in.
-    static LAST_HOST: Mutex<Option<(i32, Option<String>)>> = Mutex::new(None);
+    static LAST_HOST: Mutex<Option<(i32, Option<String>, bool)>> = Mutex::new(None);
+
+    /// Name of a browser that refused Automation access (-1743) since the last
+    /// `take_tab_denied`. The watcher turns it into a one-time warning toast.
+    static TAB_DENIED: Mutex<Option<String>> = Mutex::new(None);
+
+    pub fn take_tab_denied() -> Option<String> {
+        TAB_DENIED.lock().ok().and_then(|mut d| d.take())
+    }
 
     /// Seconds since the last hardware keyboard/mouse/trackpad input. No permission needed.
     fn hid_idle_secs() -> u64 {
@@ -940,24 +955,39 @@ mod platform {
     /// Run a constant AppleScript with a hard deadline. None on any failure: permission
     /// denied (-1743), no window, timeout.
     fn osascript(script: &str) -> Option<String> {
+        osascript_result(script).ok()
+    }
+
+    /// Run a script. Err holds osascript's error text ("timeout" if it ran too long), so
+    /// a caller can tell "not authorized" (-1743) from other failures.
+    fn osascript_result(script: &str) -> Result<String, String> {
         let mut child = Command::new("/usr/bin/osascript")
             .arg("-e")
             .arg(script)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
-            .ok()?;
+            .map_err(|e| e.to_string())?;
         let deadline = Instant::now() + OSASCRIPT_TIMEOUT;
         loop {
             match child.try_wait() {
                 Ok(Some(status)) => {
                     if !status.success() {
-                        return None;
+                        let mut err = String::new();
+                        if let Some(mut e) = child.stderr.take() {
+                            let _ = e.read_to_string(&mut err);
+                        }
+                        return Err(err.trim().to_string());
                     }
                     let mut out = String::new();
-                    child.stdout.take()?.read_to_string(&mut out).ok()?;
-                    return Some(out.trim().to_string());
+                    child
+                        .stdout
+                        .take()
+                        .ok_or_else(|| "no stdout".to_string())?
+                        .read_to_string(&mut out)
+                        .map_err(|e| e.to_string())?;
+                    return Ok(out.trim().to_string());
                 }
                 Ok(None) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(50));
@@ -965,7 +995,7 @@ mod platform {
                 _ => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return None;
+                    return Err("timeout".into());
                 }
             }
         }
@@ -1136,25 +1166,38 @@ mod platform {
             Some(b) if !is_self => BROWSERS.iter().find(|(id, _)| id == b),
             _ => None,
         };
-        let domain = match browser {
-            None => None,
+        let (domain, tab_unreadable) = match browser {
+            None => (None, false),
             Some(_) if idle => LAST_HOST
                 .lock()
                 .ok()
-                .and_then(|c| c.as_ref().filter(|(p, _)| *p == pid).and_then(|(_, h)| h.clone())),
+                .and_then(|c| c.as_ref().filter(|(p, _, _)| *p == pid).map(|(_, h, u)| (h.clone(), *u)))
+                .unwrap_or((None, false)),
             Some((_, script)) => {
-                let host = osascript(script).and_then(|u| url_host(&u));
+                let (host, unreadable) = match osascript_result(script) {
+                    Ok(u) => (url_host(&u), false),
+                    // No window open: nothing to be on or off task in.
+                    Err(e) if e.contains("-1728") || e.contains("-1719") => (None, false),
+                    Err(e) => {
+                        if e.contains("-1743") {
+                            if let Ok(mut d) = TAB_DENIED.lock() {
+                                *d = Some(name.clone());
+                            }
+                        }
+                        (None, true)
+                    }
+                };
                 if let Ok(mut c) = LAST_HOST.lock() {
-                    *c = Some((pid, host.clone()));
+                    *c = Some((pid, host.clone(), unreadable));
                 }
-                host
+                (host, unreadable)
             }
         };
         let video = idle && !is_self && {
             let bundle_path = app.bundleURL().and_then(|u| u.path()).map(|p| p.to_string());
             video_in_front(pid, bundle_path.as_deref())
         };
-        Sample::Front(FrontApp { bundle_id, name, domain, is_self, idle_secs, video, pid })
+        Sample::Front(FrontApp { bundle_id, name, domain, tab_unreadable, is_self, idle_secs, video, pid })
     }
 
     /// Bring a running app forward. False if it isn't running.
@@ -1245,6 +1288,10 @@ mod platform {
     pub fn sample(_idle_after_secs: u64) -> Sample {
         Sample::Away
     }
+    pub fn take_tab_denied() -> Option<String> {
+        None
+    }
+
     pub fn in_meeting() -> bool {
         false
     }
@@ -1513,6 +1560,8 @@ pub fn init<R: Runtime>(app: &AppHandle<R>) {
 
 fn watch<R: Runtime>(app: AppHandle<R>, state: Arc<GuardState>) {
     let epoch = Instant::now();
+    // Browsers already warned about this run, so a lost Automation grant toasts once.
+    let mut warned_tabs: std::collections::HashSet<String> = std::collections::HashSet::new();
     loop {
         std::thread::sleep(TICK);
         let (cfg, mode) = {
@@ -1539,6 +1588,11 @@ fn watch<R: Runtime>(app: AppHandle<R>, state: Arc<GuardState>) {
         } else {
             Some(platform::sample(cfg.idle_after_secs))
         };
+        if let Some(browser) = platform::take_tab_denied() {
+            if warned_tabs.insert(browser) {
+                crate::toast::show_toast(&app, "no_tab_access", "Allow in Privacy & Security → Automation", "main");
+            }
+        }
         let now_ms = epoch.elapsed().as_millis() as u64;
         let actions = {
             let Ok(mut inner) = state.inner.lock() else { return };
@@ -2312,6 +2366,24 @@ mod tests {
             Some(NudgeKind::Drift { app, count: 1 }) => assert_eq!(app.domain.as_deref(), Some("youtube.com")),
             other => panic!("unexpected nudge {other:?}"),
         }
+    }
+
+    #[test]
+    fn an_unreadable_browser_tab_is_not_drift() {
+        // 2026-10-12: an update reset Chrome's Automation grant, the tab read failed and
+        // "Find 11 linkedin leads" was nudged as "drifted to Google Chrome".
+        let c = cfg();
+        let mut m = Machine::default();
+        let Sample::Front(mut chrome) = app("com.google.Chrome", None) else { unreachable!() };
+        chrome.tab_unreadable = true;
+        assert!(is_on_task(&c, &chrome));
+        let s = Sample::Front(chrome);
+        let a = run(&mut m, &c, &s, 0, 120_000);
+        assert_eq!(opened(&a), 0);
+        // A readable tab with no host (chrome://newtab) is still off task.
+        let newtab = app("com.google.Chrome", None);
+        let Sample::Front(n) = &newtab else { unreachable!() };
+        assert!(!is_on_task(&c, n));
     }
 
     #[test]

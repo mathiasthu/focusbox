@@ -43,3 +43,8 @@ docs/superpowers/
 
 # Playwright MCP verification artifacts (snapshots/console logs/screenshots)
 .playwright-mcp/
+
+# macOS self-signed code-signing certificate (private key) — never commit
+.macos-signing/
+.gitignore.bak-*
+HANDOFF.md.bak-*

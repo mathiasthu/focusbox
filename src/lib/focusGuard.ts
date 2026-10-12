@@ -760,6 +760,8 @@ export function toastCopy(result: string): { title: string; ok: boolean } {
       return { title: "Todoist key rejected. Saved until fixed", ok: false };
     case "rejected":
       return { title: "Todoist refused it", ok: false };
+    case "no_tab_access":
+      return { title: "Focusbox can't see your browser tabs", ok: false };
     default:
       return { title: "Parked", ok: false };
   }

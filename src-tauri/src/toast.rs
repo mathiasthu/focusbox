@@ -28,7 +28,8 @@ const FADE_MS: u64 = 300;
 pub struct ToastPayload {
     /// Increments on every show, so the page can restart its timer on a replace.
     pub seq: u64,
-    /// The park result: "sent" | "queued" | "no_token" | "auth_blocked" | "rejected".
+    /// The park result: "sent" | "queued" | "no_token" | "auth_blocked" | "rejected", or
+    /// "no_tab_access" from the guard when a browser refused to share its tab.
     /// The page turns it into words (focusGuard.ts toastCopy).
     pub result: String,
     pub text: String,
@@ -39,6 +40,8 @@ pub struct ToastPayload {
 pub fn duration_for(result: &str) -> u64 {
     if result == "sent" {
         2_500
+    } else if result == "no_tab_access" {
+        8_000
     } else {
         3_500
     }
