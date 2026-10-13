@@ -33,6 +33,8 @@
     "allow-guard-preview-nudge",
     "allow-guard-running-apps",
     "allow-guard-in-meeting",
+    "allow-guard-automation-status",
+    "allow-guard-open-automation-settings",
     "allow-todoist-status",
     "allow-todoist-set-token",
     "allow-todoist-clear-token",

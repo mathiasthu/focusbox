@@ -2,6 +2,7 @@
 // side reports the guard as supported). Device-local: stored in localStorage via
 // focusGuard.ts, never in the settings sync blob.
 import { useEffect, useState } from "react";
+import { AutomationPermissions } from "./AutomationPermissions";
 import {
   addAlwaysApp,
   addAlwaysDomain,
@@ -406,6 +407,8 @@ export default function FocusGuardSettings({ prefs, onChange, onOpenStats, previ
         While a Focus task's timer runs, a full-screen reminder appears if you stay in an app or site
         that isn't part of the task. Pause the timer and it leaves you alone. Applies to this Mac only.
       </span>
+
+      <AutomationPermissions />
 
       {prefs.enabled && (
         <>

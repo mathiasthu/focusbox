@@ -671,6 +671,66 @@ export async function guardInMeeting(): Promise<boolean> {
   }
 }
 
+export type AutomationStatus = "granted" | "denied" | "needs_consent" | "not_running" | "unknown";
+
+/** An app Focusbox sends Apple Events to (Privacy & Security → Automation). */
+export interface AutomationTarget {
+  bundleId: string;
+  name: string;
+  /** "browser": the focus guard reads its open tab. "spotify": the mini-player. */
+  purpose: "browser" | "spotify";
+  status: AutomationStatus;
+}
+
+/** Automation status of each installed target app, straight from macOS. With `askFor` (a
+ * bundle id), macOS shows its "Focusbox wants to control …" prompt for that app if it is
+ * running and was never asked. */
+export async function guardAutomationStatus(askFor?: string): Promise<AutomationTarget[]> {
+  if (!available()) return [];
+  try {
+    return await invoke<AutomationTarget[]>("guard_automation_status", { askFor: askFor ?? null });
+  } catch {
+    return [];
+  }
+}
+
+/** Open System Settings at Privacy & Security → Automation. */
+export async function openAutomationSettings(): Promise<boolean> {
+  if (!available()) return false;
+  try {
+    return await invoke<boolean>("guard_open_automation_settings");
+  } catch {
+    return false;
+  }
+}
+
+/** Whether a status needs the user to do something. */
+export function automationMissing(status: AutomationStatus): boolean {
+  return status === "denied" || status === "needs_consent";
+}
+
+/** The first browser the focus guard can't read tabs from, if any. Its tab can't be seen,
+ * so the guard can't tell whether a site belongs to the task. */
+export function blockedBrowser(targets: AutomationTarget[]): AutomationTarget | null {
+  return targets.find((t) => t.purpose === "browser" && automationMissing(t.status)) ?? null;
+}
+
+/** One line on what to do about a target's status. */
+export function automationAdvice(t: AutomationTarget): string {
+  switch (t.status) {
+    case "granted":
+      return "Allowed.";
+    case "needs_consent":
+      return `Click Allow, then OK in the macOS prompt.`;
+    case "denied":
+      return `In System Settings → Privacy & Security → Automation, open Focusbox and turn on ${t.name}.`;
+    case "not_running":
+      return `Open ${t.name} to check.`;
+    default:
+      return "macOS didn't answer. Try again in a moment.";
+  }
+}
+
 /** Settings → "Preview nudge". "ok", or "real_nudge_open" (a real nudge is up and wins). */
 export async function previewNudge(taskText: string, blur: boolean): Promise<string> {
   if (!available()) return "unavailable";

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Editor } from "@tiptap/react";
 import Timer, { type TimerHandle } from "./components/Timer";
 import StartTimerPrompt from "./components/StartTimerPrompt";
+import { AutomationWarning } from "./components/AutomationPermissions";
 import {
   getPromptUsedDay,
   getRemindStart,
@@ -642,6 +643,7 @@ export default function App() {
             onDismiss={markPromptUsed}
           />
         )}
+        <AutomationWarning enabled={guardOn} />
         {(lineDragging || focusTask) && (
           <div
             className={`focus-slot${lineDragging ? " focus-slot--target" : ""}`}

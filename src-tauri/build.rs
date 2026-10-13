@@ -21,6 +21,8 @@ const COMMANDS: &[&str] = &[
     "guard_preview_nudge",
     "guard_running_apps",
     "guard_in_meeting",
+    "guard_automation_status",
+    "guard_open_automation_settings",
     "todoist_status",
     "todoist_set_token",
     "todoist_clear_token",

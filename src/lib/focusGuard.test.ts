@@ -1,6 +1,11 @@
 import "./testDomShim";
 import { describe, expect, it, beforeEach } from "vitest";
 import {
+  automationAdvice,
+  automationMissing,
+  blockedBrowser,
+  type AutomationStatus,
+  type AutomationTarget,
   addAlwaysApp,
   addAlwaysDomain,
   appDisplayName,
@@ -539,5 +544,33 @@ describe("aggregateStats", () => {
 
   it("localDay pads months and days", () => {
     expect(localDay(new Date(2026, 0, 2, 3).getTime())).toBe("2026-01-02");
+  });
+});
+
+describe("automation permissions", () => {
+  const t = (name: string, purpose: "browser" | "spotify", status: AutomationStatus): AutomationTarget => ({
+    bundleId: name,
+    name,
+    purpose,
+    status,
+  });
+
+  it("only denied and never-asked need the user", () => {
+    expect(automationMissing("denied")).toBe(true);
+    expect(automationMissing("needs_consent")).toBe(true);
+    expect(automationMissing("granted")).toBe(false);
+    expect(automationMissing("not_running")).toBe(false);
+    expect(automationMissing("unknown")).toBe(false);
+  });
+
+  it("blockedBrowser ignores Spotify and allowed browsers", () => {
+    expect(blockedBrowser([t("Spotify", "spotify", "denied"), t("Safari", "browser", "granted")])).toBeNull();
+    const chrome = t("Google Chrome", "browser", "denied");
+    expect(blockedBrowser([t("Safari", "browser", "not_running"), chrome])).toBe(chrome);
+  });
+
+  it("advice names the app and where to switch it on", () => {
+    expect(automationAdvice(t("Google Chrome", "browser", "denied"))).toContain("turn on Google Chrome");
+    expect(automationAdvice(t("Safari", "browser", "not_running"))).toBe("Open Safari to check.");
   });
 });

@@ -276,6 +276,24 @@ pub fn host_matches(host: &str, pattern: &str) -> bool {
     host == p || host.ends_with(&format!(".{p}"))
 }
 
+/// Short form of an osascript failure for the log: "timeout", "err -1743" (the code in
+/// the trailing parentheses), or "err".
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn tab_error_note(e: &str) -> String {
+    if e == "timeout" {
+        return e.into();
+    }
+    let code = e
+        .rsplit_once('(')
+        .and_then(|(_, tail)| tail.split_once(')'))
+        .map(|(c, _)| c.trim())
+        .filter(|c| c.starts_with('-') && c[1..].chars().all(|ch| ch.is_ascii_digit()));
+    match code {
+        Some(c) => format!("err {c}"),
+        None => "err".into(),
+    }
+}
+
 /// The host of an http(s) URL, lowercased. Anything else (chrome://newtab, file://,
 /// about:blank, garbage) has no domain.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -302,6 +320,8 @@ pub struct FrontApp {
     /// was denied (macOS drops it when an update changes the app's signature) or the read
     /// timed out. On or off task can't be told, so it isn't counted as drift.
     pub tab_unreadable: bool,
+    /// How the tab read went when it gave no site (logged with a drift; see LogEntry.tab).
+    pub tab_note: Option<String>,
     /// The frontmost process is this one (covers the dev build, which has no bundle id).
     pub is_self: bool,
     /// Seconds since the last real (HID) keyboard/mouse/trackpad input.
@@ -654,6 +674,10 @@ pub struct LogEntry {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secs: Option<u64>,
+    /// Drift in a browser: how its tab read went when no site was known ("timeout",
+    /// "err -1743", "scheme chrome"). Diagnostics for a nudge that names the browser.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab: Option<String>,
 }
 
 fn now_epoch_ms() -> u64 {
@@ -1006,6 +1030,67 @@ mod platform {
     static MEETING: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
     const MEETING_RECHECK: Duration = Duration::from_secs(10);
 
+    #[repr(C)]
+    struct AEDesc {
+        descriptor_type: u32,
+        data_handle: *mut std::ffi::c_void,
+    }
+
+    #[link(name = "CoreServices", kind = "framework")]
+    extern "C" {
+        fn AECreateDesc(type_code: u32, data_ptr: *const std::ffi::c_void, data_size: isize, result: *mut AEDesc) -> i16;
+        fn AEDisposeDesc(desc: *mut AEDesc) -> i16;
+        fn AEDeterminePermissionToAutomateTarget(
+            target: *const AEDesc,
+            event_class: u32,
+            event_id: u32,
+            ask_user_if_needed: u8,
+        ) -> i32;
+    }
+
+    const TYPE_APPLICATION_BUNDLE_ID: u32 = u32::from_be_bytes(*b"bund");
+    const TYPE_WILD_CARD: u32 = u32::from_be_bytes(*b"****");
+
+    /// Ask macOS (not osascript) whether Focusbox may send Apple Events to an app. The
+    /// answer is for Focusbox itself, which is also the responsible process for the
+    /// osascript children that read tabs.
+    pub fn automation_permission(bundle_id: &str, ask: bool) -> super::AutomationStatus {
+        let bytes = bundle_id.as_bytes();
+        let mut desc = AEDesc { descriptor_type: 0, data_handle: std::ptr::null_mut() };
+        let err = unsafe { AECreateDesc(TYPE_APPLICATION_BUNDLE_ID, bytes.as_ptr().cast(), bytes.len() as isize, &mut desc) };
+        if err != 0 {
+            return super::AutomationStatus::Unknown;
+        }
+        let status = unsafe { AEDeterminePermissionToAutomateTarget(&desc, TYPE_WILD_CARD, TYPE_WILD_CARD, ask as u8) };
+        unsafe { AEDisposeDesc(&mut desc) };
+        super::AutomationStatus::from_os_status(status)
+    }
+
+    pub fn app_installed(bundle_id: &str) -> bool {
+        objc2::rc::autoreleasepool(|_| {
+            NSWorkspace::sharedWorkspace()
+                .URLForApplicationWithBundleIdentifier(&NSString::from_str(bundle_id))
+                .is_some()
+        })
+    }
+
+    /// A constant URL; nothing from the webview reaches it. Not waited on: the command
+    /// runs on the main thread and System Settings can take a while to launch.
+    pub fn open_automation_settings() -> bool {
+        Command::new("/usr/bin/open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|mut child| {
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            })
+            .is_ok()
+    }
+
     /// Whether the user is in a Zoom meeting or has a Google Meet / Zoom web call open.
     pub fn in_meeting() -> bool {
         if let Ok(c) = MEETING.lock() {
@@ -1166,6 +1251,7 @@ mod platform {
             Some(b) if !is_self => BROWSERS.iter().find(|(id, _)| id == b),
             _ => None,
         };
+        let mut tab_note: Option<String> = None;
         let (domain, tab_unreadable) = match browser {
             None => (None, false),
             Some(_) if idle => LAST_HOST
@@ -1175,10 +1261,21 @@ mod platform {
                 .unwrap_or((None, false)),
             Some((_, script)) => {
                 let (host, unreadable) = match osascript_result(script) {
-                    Ok(u) => (url_host(&u), false),
-                    // No window open: nothing to be on or off task in.
-                    Err(e) if e.contains("-1728") || e.contains("-1719") => (None, false),
+                    Ok(u) => {
+                        let host = url_host(&u);
+                        if host.is_none() {
+                            tab_note = Some(match url::Url::parse(u.trim()) {
+                                Ok(parsed) => format!("scheme {}", parsed.scheme()),
+                                // Never the text itself: it could be a page title.
+                                Err(_) => "unparsed".into(),
+                            });
+                        }
+                        (host, false)
+                    }
+                    // Whatever the failure (refused, timed out, no window), the guard can't
+                    // tell, and a false "you drifted" is worse than a missed one.
                     Err(e) => {
+                        tab_note = Some(super::tab_error_note(&e));
                         if e.contains("-1743") {
                             if let Ok(mut d) = TAB_DENIED.lock() {
                                 *d = Some(name.clone());
@@ -1197,7 +1294,7 @@ mod platform {
             let bundle_path = app.bundleURL().and_then(|u| u.path()).map(|p| p.to_string());
             video_in_front(pid, bundle_path.as_deref())
         };
-        Sample::Front(FrontApp { bundle_id, name, domain, tab_unreadable, is_self, idle_secs, video, pid })
+        Sample::Front(FrontApp { bundle_id, name, domain, tab_unreadable, tab_note, is_self, idle_secs, video, pid })
     }
 
     /// Bring a running app forward. False if it isn't running.
@@ -1290,6 +1387,18 @@ mod platform {
     }
     pub fn take_tab_denied() -> Option<String> {
         None
+    }
+
+    pub fn automation_permission(_bundle_id: &str, _ask: bool) -> super::AutomationStatus {
+        super::AutomationStatus::Unknown
+    }
+
+    pub fn app_installed(_bundle_id: &str) -> bool {
+        false
+    }
+
+    pub fn open_automation_settings() -> bool {
+        false
     }
 
     pub fn in_meeting() -> bool {
@@ -1532,6 +1641,7 @@ impl GuardState {
             reason: reason.map(clip),
             text: None,
             secs: None,
+            tab: app.and_then(|a| a.tab_note.clone()),
         });
     }
 }
@@ -1627,6 +1737,7 @@ fn watch<R: Runtime>(app: AppHandle<R>, state: Arc<GuardState>) {
                     reason: None,
                     text: None,
                     secs: Some(secs),
+                    tab: None,
                 }),
                 Action::Focused { task, secs } => state.log(LogEntry {
                     ts: now_epoch_ms(),
@@ -1637,6 +1748,7 @@ fn watch<R: Runtime>(app: AppHandle<R>, state: Arc<GuardState>) {
                     reason: None,
                     text: None,
                     secs: Some(secs),
+                    tab: None,
                 }),
             }
         }
@@ -1925,6 +2037,79 @@ fn back_to_task<R: Runtime>(app: &AppHandle<R>, bundle: Option<String>) {
 // Commands
 // ---------------------------------------------------------------------------------------
 
+/// Apps Focusbox sends Apple Events to, and why. Listed in Settings → Permissions.
+pub const AUTOMATION_TARGETS: &[(&str, &str, &str)] = &[
+    ("com.google.Chrome", "Google Chrome", "browser"),
+    ("company.thebrowser.Browser", "Arc", "browser"),
+    ("com.apple.Safari", "Safari", "browser"),
+    ("com.spotify.client", "Spotify", "spotify"),
+];
+
+/// Privacy & Security → Automation for one target app, as macOS reports it.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationStatus {
+    Granted,
+    /// Switched off in System Settings. Only the user can turn it back on there.
+    Denied,
+    /// Never asked. Asking shows the macOS "Focusbox wants to control …" prompt.
+    NeedsConsent,
+    /// macOS only answers for a running app.
+    NotRunning,
+    Unknown,
+}
+
+impl AutomationStatus {
+    /// From `AEDeterminePermissionToAutomateTarget`'s OSStatus.
+    pub fn from_os_status(s: i32) -> Self {
+        match s {
+            0 => AutomationStatus::Granted,
+            -1743 => AutomationStatus::Denied,
+            -1744 => AutomationStatus::NeedsConsent,
+            -600 => AutomationStatus::NotRunning,
+            _ => AutomationStatus::Unknown,
+        }
+    }
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationTarget {
+    pub bundle_id: String,
+    pub name: String,
+    /// "browser" (focus guard tab reading) or "spotify" (mini-player).
+    pub purpose: String,
+    pub status: AutomationStatus,
+}
+
+/// Automation status of every installed target app. With `ask_for` set to one of the
+/// targets' bundle ids, macOS shows its consent prompt for that app if it is running and
+/// was never asked. The call blocks until the prompt is answered (or on a hung target), so
+/// it runs on the blocking pool. Main window only (see capabilities).
+#[tauri::command]
+pub async fn guard_automation_status(ask_for: Option<String>) -> Result<Vec<AutomationTarget>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        AUTOMATION_TARGETS
+            .iter()
+            .filter(|(id, _, _)| platform::app_installed(id))
+            .map(|(id, name, purpose)| AutomationTarget {
+                bundle_id: (*id).into(),
+                name: (*name).into(),
+                purpose: (*purpose).into(),
+                status: platform::automation_permission(id, ask_for.as_deref() == Some(*id)),
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Open System Settings at Privacy & Security → Automation. Main window only.
+#[tauri::command]
+pub fn guard_open_automation_settings() -> bool {
+    platform::open_automation_settings()
+}
+
 /// True only where the watcher can actually see other apps (macOS).
 #[tauri::command]
 pub fn guard_supported() -> bool {
@@ -1955,6 +2140,7 @@ pub fn guard_set_config<R: Runtime>(
             text: closed_nudge.then(|| "closed an open nudge".to_string()),
             // Whole minutes, as chosen.
             secs: Some((secs + 30) / 60 * 60),
+            tab: None,
         });
     }
     if closed_nudge {
@@ -2082,6 +2268,7 @@ pub async fn nudge_resolve<R: Runtime>(
                 reason: reason.clone(),
                 text: Some(what),
                 secs: None,
+                tab: None,
             });
             finish(&state, &app);
             back_to_task(&app, back_bundle);
@@ -2366,6 +2553,37 @@ mod tests {
             Some(NudgeKind::Drift { app, count: 1 }) => assert_eq!(app.domain.as_deref(), Some("youtube.com")),
             other => panic!("unexpected nudge {other:?}"),
         }
+    }
+
+    /// Live probe (macOS): asks without prompting. Run by hand with `--ignored`; it reports
+    /// the permission of whatever process runs the test, not the installed app's.
+    #[test]
+    #[ignore]
+    fn automation_probe_live() {
+        for (id, name, _) in AUTOMATION_TARGETS {
+            let installed = platform::app_installed(id);
+            let status = if installed { Some(platform::automation_permission(id, false)) } else { None };
+            println!("{name}: installed={installed} status={status:?}");
+        }
+    }
+
+    #[test]
+    fn tab_error_notes() {
+        assert_eq!(tab_error_note("timeout"), "timeout");
+        assert_eq!(
+            tab_error_note("0:66: execution error: Not authorized to send Apple events to Google Chrome. (-1743)"),
+            "err -1743"
+        );
+        assert_eq!(tab_error_note("something odd"), "err");
+    }
+
+    #[test]
+    fn automation_status_from_os_status() {
+        assert_eq!(AutomationStatus::from_os_status(0), AutomationStatus::Granted);
+        assert_eq!(AutomationStatus::from_os_status(-1743), AutomationStatus::Denied);
+        assert_eq!(AutomationStatus::from_os_status(-1744), AutomationStatus::NeedsConsent);
+        assert_eq!(AutomationStatus::from_os_status(-600), AutomationStatus::NotRunning);
+        assert_eq!(AutomationStatus::from_os_status(-50), AutomationStatus::Unknown);
     }
 
     #[test]
@@ -2950,6 +3168,7 @@ mod tests {
             reason: None,
             text: None,
             secs: None,
+            tab: None,
         })
         .unwrap();
         let content = format!("{}\n{}\nnot json\n\n{}\n", e(10), e(500), e(1000));
@@ -2976,6 +3195,7 @@ mod tests {
             reason: Some("customer emergency call".into()),
             text: None,
             secs: None,
+            tab: None,
         };
         append_log(&path, &entry);
         append_log(&path, &LogEntry { ts: 5, ..entry.clone() });

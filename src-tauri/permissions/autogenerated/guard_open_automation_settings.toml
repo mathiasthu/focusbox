@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-guard-open-automation-settings"
+description = "Enables the guard_open_automation_settings command without any pre-configured scope."
+commands.allow = ["guard_open_automation_settings"]
+
+[[permission]]
+identifier = "deny-guard-open-automation-settings"
+description = "Denies the guard_open_automation_settings command without any pre-configured scope."
+commands.deny = ["guard_open_automation_settings"]

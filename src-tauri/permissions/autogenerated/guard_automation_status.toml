@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-guard-automation-status"
+description = "Enables the guard_automation_status command without any pre-configured scope."
+commands.allow = ["guard_automation_status"]
+
+[[permission]]
+identifier = "deny-guard-automation-status"
+description = "Denies the guard_automation_status command without any pre-configured scope."
+commands.deny = ["guard_automation_status"]
