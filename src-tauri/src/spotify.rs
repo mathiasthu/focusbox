@@ -34,21 +34,59 @@ impl SpotifyState {
 #[cfg(target_os = "macos")]
 mod imp {
     use super::SpotifyState;
-    use std::process::Command;
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
 
     const OSASCRIPT: &str = "/usr/bin/osascript";
     const PGREP: &str = "/usr/bin/pgrep";
+    /// A Spotify that stops answering Apple events leaves osascript waiting forever
+    /// (seen 2026-10-22: one call hung for two hours), so give up after this. Long
+    /// enough to answer the first-run Automation prompt, which osascript waits on.
+    const OSASCRIPT_TIMEOUT: Duration = Duration::from_secs(20);
 
     fn run_osascript(script: &str) -> Result<String, String> {
-        let output = Command::new(OSASCRIPT)
+        run_osascript_within(script, OSASCRIPT_TIMEOUT)
+    }
+
+    /// Err holds osascript's error text, or "timeout" if it was killed for running
+    /// past `timeout`.
+    fn run_osascript_within(script: &str, timeout: Duration) -> Result<String, String> {
+        let mut child = Command::new(OSASCRIPT)
             .arg("-e")
             .arg(script)
-            .output()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|e| format!("spawn osascript failed: {e}"))?;
-        if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        let deadline = Instant::now() + timeout;
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    let mut out = String::new();
+                    let mut err = String::new();
+                    if let Some(mut o) = child.stdout.take() {
+                        let _ = o.read_to_string(&mut out);
+                    }
+                    if let Some(mut e) = child.stderr.take() {
+                        let _ = e.read_to_string(&mut err);
+                    }
+                    if !status.success() {
+                        return Err(err.trim().to_string());
+                    }
+                    return Ok(out.trim().to_string());
+                }
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("timeout".into());
+                }
+            }
         }
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
     /// Permission-free running check: no Apple events, never launches Spotify.
@@ -114,6 +152,11 @@ mod imp {
                 eprintln!("[focusbox] Spotify Apple events not authorized: {e}");
                 SpotifyState::simple("denied")
             }
+            Err(e) if e == "timeout" => {
+                // Spotify isn't answering; don't wait on it a second time.
+                eprintln!("[focusbox] spotify_state: Spotify did not answer");
+                SpotifyState::simple("unavailable")
+            }
             Err(_) => {
                 // Most likely stopped with no current track to name — fall back
                 // to just the player state.
@@ -132,18 +175,43 @@ mod imp {
             }
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn a_hung_osascript_times_out() {
+            let started = Instant::now();
+            let res = run_osascript_within("delay 10", Duration::from_millis(300));
+            assert_eq!(res, Err("timeout".to_string()));
+            assert!(started.elapsed() < Duration::from_secs(3));
+        }
+
+        #[test]
+        fn a_quick_osascript_returns_its_output() {
+            let res = run_osascript_within(r#"return "ok""#, Duration::from_secs(10));
+            assert_eq!(res, Ok("ok".to_string()));
+        }
+    }
+}
+
+// Async so Tauri runs them off the main thread: a plain (sync) command runs on the UI
+// thread, and a slow osascript call there froze the whole window.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn spotify_control(action: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || imp::control(&action))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub fn spotify_control(action: String) -> Result<(), String> {
-    imp::control(&action)
-}
-
-#[cfg(target_os = "macos")]
-#[tauri::command]
-pub fn spotify_state() -> SpotifyState {
-    imp::state()
+pub async fn spotify_state() -> SpotifyState {
+    tauri::async_runtime::spawn_blocking(imp::state)
+        .await
+        .unwrap_or_else(|_| SpotifyState::simple("unavailable"))
 }
 
 // ---- Non-macOS fallbacks (Windows/Linux) so the app still builds ----
